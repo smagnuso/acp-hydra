@@ -935,7 +935,7 @@ export class GitProvider implements IsolationProvider {
 
   async resolveRoot(somePath: string): Promise<string | undefined> {
     const top = await runGit(["rev-parse", "--show-toplevel"], somePath, QUERY_TIMEOUT_MS);
-    const root = top.stdout.trim();
+    const root = nativePath(top.stdout.trim());
     return top.ok && root.length > 0 ? root : undefined;
   }
 
@@ -1192,7 +1192,7 @@ export class GitProvider implements IsolationProvider {
       dir,
       QUERY_TIMEOUT_MS,
     );
-    const gitDir = common.stdout.trim();
+    const gitDir = nativePath(common.stdout.trim());
     if (!common.ok || gitDir.length === 0) {
       return undefined;
     }
