@@ -73,6 +73,14 @@ describe("findExternalSubcommand", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  // Paths compare case-insensitively: PATHEXT is conventionally
+  // uppercase and Windows' filesystem is not case-sensitive, so a
+  // fixture written as .cmd is legitimately found as .CMD. Which casing
+  // comes back is not a behavioural difference there.
+  function expectSamePath(actual: string | undefined, expected: string): void {
+    expect(actual?.toLowerCase()).toBe(expected.toLowerCase());
+  }
+
   // Creates the name the platform can actually execute, and returns it.
   // On Windows an extensionless file is not runnable and
   // findExternalSubcommand only considers PATHEXT extensions, so a
@@ -93,7 +101,7 @@ describe("findExternalSubcommand", () => {
   it("finds a hydra-acp-<name> binary on PATH", () => {
     const target = makeExecutable(pathDir1, "hydra-acp-planner");
     const env = { PATH: [pathDir1, pathDir2].join(delimiter) };
-    expect(findExternalSubcommand("planner", env)).toBe(target);
+    expectSamePath(findExternalSubcommand("planner", env), target);
   });
 
   it("returns undefined when no binary matches", () => {
@@ -105,7 +113,7 @@ describe("findExternalSubcommand", () => {
     const first = makeExecutable(pathDir1, "hydra-acp-planner");
     makeExecutable(pathDir2, "hydra-acp-planner");
     const env = { PATH: [pathDir1, pathDir2].join(delimiter) };
-    expect(findExternalSubcommand("planner", env)).toBe(first);
+    expectSamePath(findExternalSubcommand("planner", env), first);
   });
 
   it("skips non-executable files (unix)", () => {
@@ -133,6 +141,6 @@ describe("findExternalSubcommand", () => {
   it("respects subcommand names with hyphens", () => {
     const target = makeExecutable(pathDir1, "hydra-acp-my-team");
     const env = { PATH: pathDir1 };
-    expect(findExternalSubcommand("my-team", env)).toBe(target);
+    expectSamePath(findExternalSubcommand("my-team", env), target);
   });
 });

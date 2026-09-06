@@ -30,9 +30,13 @@ export async function writeFakeCommand(
   const scriptPath = path.join(dir, `${name}.mjs`);
   await fs.writeFile(scriptPath, jsBody, "utf8");
   if (process.platform === "win32") {
+    // process.execPath, not a bare `node`: callers sandbox PATH down to
+    // the fake's own directory, so a bare name has nothing to resolve
+    // against and the shim exits 1 before running anything. Same reason
+    // the POSIX branch below spells it out.
     await fs.writeFile(
       path.join(dir, `${name}.cmd`),
-      `@echo off\r\nnode "%~dp0${name}.mjs" %*\r\n`,
+      `@echo off\r\n"${process.execPath}" "%~dp0${name}.mjs" %*\r\n`,
       "utf8",
     );
     return;
