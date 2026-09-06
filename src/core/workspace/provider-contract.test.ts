@@ -558,4 +558,34 @@ describe("copy provider specifics", () => {
     }
     await expect(fs.access(path.join(res.workspace.path, ".git"))).rejects.toThrow();
   });
+
+  // Windows needs Developer Mode or admin rights to make a symlink, and
+  // the aliasing this pins is not Windows-specific, so reproduce it with
+  // the vehicle POSIX has. It is how the bug was found, though: the 8.3
+  // short path a Windows tmpdir reports is the same shape of alias.
+  it.skipIf(process.platform === "win32")(
+    "does not copy .git when reached through a symlinked source",
+    async () => {
+      // fs.cp given an aliased directory calls `filter` once for the root
+      // and then copies the dereferenced tree without consulting it
+      // again, so the skip list silently stops applying. A symlinked
+      // project directory is ordinary, and the result was a copied .git
+      // presenting as a detached repository.
+      const provider = new CopyProvider();
+      const real = await makeGitSource();
+      const alias = path.join(path.dirname(real), `${path.basename(real)}-link`);
+      await fs.symlink(real, alias);
+
+      const res = await provider.createWorkspace({ sourceCwd: alias, label: "nogitlink" });
+      expect(res.ok).toBe(true);
+      if (!res.ok) {
+        return;
+      }
+      await expect(fs.access(path.join(res.workspace.path, ".git"))).rejects.toThrow();
+      // The rest of the tree still came across.
+      expect(await fs.readFile(path.join(res.workspace.path, "file.txt"), "utf8")).toBe(
+        "original\n",
+      );
+    },
+  );
 });

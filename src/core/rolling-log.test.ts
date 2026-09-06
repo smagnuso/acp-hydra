@@ -12,7 +12,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
+  // Retries: a test that opened a real log stream may still be closing
+  // it, and Windows refuses to remove a directory holding an open file.
+  rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
 describe("resolveRollingLogPath", () => {
@@ -71,7 +73,12 @@ describe("resolveRollingLogPath", () => {
     await expect
       .poll(() => readFileSync(resolved, "utf8"), { timeout: 5_000 })
       .toContain("marker line");
-    stream.destroy();
+    // Wait for the handle to actually go, rather than firing destroy() and
+    // leaving afterEach to race it.
+    await new Promise<void>((done) => {
+      stream.on("close", () => done());
+      stream.end();
+    });
   });
 
   it("returns the requested path when no rotated sibling exists", async () => {

@@ -181,8 +181,23 @@ export class CopyProvider implements IsolationProvider {
     // the parent workspace) while the workspace still BELONGS to
     // `source`: its root and its recorded origin both follow the
     // project, not wherever the bytes came from.
-    const contentSource =
+    let contentSource =
       opts.contentFrom !== undefined ? path.resolve(opts.contentFrom) : source;
+    // Canonicalize before handing the path to fs.cp. Given a directory
+    // that is any alias of the real one, fs.cp calls `filter` for the
+    // root and then copies the dereferenced tree WITHOUT consulting it
+    // again, so every SKIP_TOP_LEVEL entry comes along — a copied .git,
+    // which is the one outcome this provider must never produce. Passing
+    // the resolved path leaves it nothing to dereference, and keeps the
+    // filter's base spelled the same way as the paths it is handed.
+    //
+    // Aliases are ordinary, not exotic: a symlinked project directory, a
+    // macOS tmpdir under /var, or a Windows 8.3 short path.
+    try {
+      contentSource = await fs.realpath(contentSource);
+    } catch {
+      // Missing or unreadable: the stat below reports it properly.
+    }
     try {
       const st = await fs.stat(contentSource);
       if (!st.isDirectory()) {
