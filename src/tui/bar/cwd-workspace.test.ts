@@ -66,7 +66,10 @@ describe("cwd bar field", () => {
     for (const g of groups(isolated)) {
       for (const chunk of g.chunks) {
         expect(chunk.value).not.toMatch(/[[\]]/);
-        expect(chunk.value?.startsWith("/")).toBe(true);
+        // The point is that the value is a real path to hand to an opener,
+        // not the `~`-abbreviated display form. `/` is only how POSIX
+        // spells that.
+        expect(path.isAbsolute(chunk.value!)).toBe(true);
       }
     }
   });

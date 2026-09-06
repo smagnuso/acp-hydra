@@ -166,7 +166,13 @@ describe("runWorkspaceHook", () => {
     // A broken setup command must not take the session down: a session
     // in a half-set-up workspace is more useful than no session.
     const ws = await tmp("hydra-hook-ws3-");
-    const res = await runWorkspaceHook("echo 'boom' >&2; exit 3", {
+    // cmd.exe reads `;` as a delimiter rather than a separator, so the
+    // POSIX spelling echoes the whole tail and exits 0.
+    const hook =
+      process.platform === "win32"
+        ? "echo boom 1>&2 & exit 3"
+        : "echo 'boom' >&2; exit 3";
+    const res = await runWorkspaceHook(hook, {
       workspacePath: ws,
       sourceCwd: ws,
       label: "l",
@@ -177,7 +183,12 @@ describe("runWorkspaceHook", () => {
 
   it("kills a hook that overruns its timeout", async () => {
     const ws = await tmp("hydra-hook-ws4-");
-    const res = await runWorkspaceHook("sleep 5", {
+    // cmd.exe has no `sleep`, so the POSIX spelling would exit nonzero
+    // immediately and satisfy the assertion without ever timing out.
+    // `timeout` is no good either — it refuses a redirected stdin, which
+    // is exactly what a hook gets — so idle with ping.
+    const hook = process.platform === "win32" ? "ping -n 6 127.0.0.1 >nul" : "sleep 5";
+    const res = await runWorkspaceHook(hook, {
       workspacePath: ws,
       sourceCwd: ws,
       label: "l",

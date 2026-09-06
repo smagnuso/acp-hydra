@@ -3,6 +3,12 @@ import * as fs from "node:fs/promises";
 import { runSessionsShare } from "./sessions.js";
 import { writeConfig, defaultConfig, type HydraConfig } from "../../core/config.js";
 import { writeServiceToken } from "../../core/service-token.js";
+import * as path from "node:path";
+
+// runSessionsShare resolves its --cwd before matching, so a session record
+// standing in for that directory has to carry the resolved spelling: on
+// Windows `/tmp/work` resolves to `C:\tmp\work` and would never match.
+const WORK = path.resolve("/tmp/work");
 
 // Capture writes to stdout / stderr without printing them in vitest.
 function captureStdio(): {
@@ -213,7 +219,7 @@ describe("runSessionsShare", () => {
           sessions: [
             {
               sessionId: "hydra_session_pickme0000000000",
-              cwd: "/tmp/work",
+              cwd: WORK,
               updatedAt: "2025-02-01T00:00:00Z",
               attachedClients: 0,
               status: "warm",
@@ -222,7 +228,7 @@ describe("runSessionsShare", () => {
         }),
         { status: 200 },
       )) as typeof fetch);
-    await runSessionsShare("", { cwd: "/tmp/work" });
+    await runSessionsShare("", { cwd: WORK });
     expect(stdio.out().trim()).toBe("hydra://127.0.0.1/pickme0000000000");
   });
 });

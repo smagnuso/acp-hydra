@@ -59,7 +59,10 @@ async function makeUnownedWorktree(repo: string, label: string): Promise<string>
 
 async function worktreeList(repo: string): Promise<string> {
   const { stdout } = await exec("git", ["worktree", "list"], { cwd: repo });
-  return stdout;
+  // git spells paths with `/` on every platform; callers compare against
+  // path.join-built natives. The product normalizes at its own call sites
+  // (git-provider's nativePath); this is the same fix for the test's.
+  return process.platform === "win32" ? stdout.split("/").join(path.sep) : stdout;
 }
 
 async function branches(repo: string): Promise<string> {

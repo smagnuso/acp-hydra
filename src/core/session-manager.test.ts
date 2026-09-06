@@ -1232,7 +1232,10 @@ describe("SessionManager: history persistence", () => {
       check: () => Promise<T | undefined>,
       pred: (v: T | undefined) => boolean,
     ): Promise<T | undefined> {
-      for (let i = 0; i < 30; i++) {
+      // Returns as soon as the predicate holds, so a generous ceiling costs
+      // nothing on a fast disk. 300ms was not enough for the debounced meta
+      // write to land on a Windows runner.
+      for (let i = 0; i < 300; i++) {
         const v = await check();
         if (pred(v)) {
           return v;

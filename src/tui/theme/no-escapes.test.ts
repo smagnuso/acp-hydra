@@ -13,9 +13,12 @@
 
 import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const SRC = new URL("../../", import.meta.url).pathname;
+// fileURLToPath, not .pathname: on Windows the latter yields `/D:/a/...`,
+// which readdirSync resolves against the current drive as `D:\D:\a\...`.
+const SRC = fileURLToPath(new URL("../../", import.meta.url));
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -66,8 +69,10 @@ const TK_STYLE =
 const CHALK = /\bchalk\b/;
 
 describe("colour lives only in the theme", () => {
+  // The ALLOWED and CHROME lists below name files with `/`, so the relative
+  // key is spelled that way on every platform.
   const files = sourceFiles(SRC).map((full) => ({
-    rel: full.slice(SRC.length),
+    rel: full.slice(SRC.length).split(sep).join("/"),
     text: readFileSync(full, "utf8"),
   }));
 
