@@ -66,10 +66,24 @@ export function makeSessionPathDisplay(
     if (rel.length === 0 || rel.startsWith("..") || path.isAbsolute(rel)) {
       return escaped(mapped);
     }
-    return rel;
+    return toRepoRelative(rel);
   };
 }
 
+// Repo-relative paths are spelled with forward slashes on every
+// platform. Unlike a cwd, which is a filesystem location and should read
+// natively (`~\proj` on Windows), these are a portable identifier: they
+// feed `diff --hydra a/<rel> b/<rel>` headers, where git uses forward
+// slashes regardless of platform, and they are compared against paths
+// the agent emits, which are also forward-slashed. `a/src\tui\app.ts`
+// would be malformed to every diff consumer.
+function toRepoRelative(rel: string): string {
+  return path.sep === "\\" ? rel.split(path.sep).join("/") : rel;
+}
+
 function trimSlash(p: string): string {
-  return p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p;
+  if (p.length <= 1) {
+    return p;
+  }
+  return p.endsWith("/") || p.endsWith(path.sep) ? p.slice(0, -1) : p;
 }

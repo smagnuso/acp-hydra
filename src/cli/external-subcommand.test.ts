@@ -73,14 +73,25 @@ describe("findExternalSubcommand", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  function makeExecutable(path: string): void {
-    writeFileSync(path, "#!/bin/sh\necho hi\n");
-    chmodSync(path, 0o755);
+  // Creates the name the platform can actually execute, and returns it.
+  // On Windows an extensionless file is not runnable and
+  // findExternalSubcommand only considers PATHEXT extensions, so a
+  // POSIX-shaped fixture is invisible to it — the lookup is right and
+  // the fixture was wrong.
+  function makeExecutable(dir: string, base: string): string {
+    if (process.platform === "win32") {
+      const target = join(dir, `${base}.cmd`);
+      writeFileSync(target, "@echo off\r\necho hi\r\n");
+      return target;
+    }
+    const target = join(dir, base);
+    writeFileSync(target, "#!/bin/sh\necho hi\n");
+    chmodSync(target, 0o755);
+    return target;
   }
 
   it("finds a hydra-acp-<name> binary on PATH", () => {
-    const target = join(pathDir1, "hydra-acp-planner");
-    makeExecutable(target);
+    const target = makeExecutable(pathDir1, "hydra-acp-planner");
     const env = { PATH: [pathDir1, pathDir2].join(delimiter) };
     expect(findExternalSubcommand("planner", env)).toBe(target);
   });
@@ -91,10 +102,8 @@ describe("findExternalSubcommand", () => {
   });
 
   it("returns the first match when multiple PATH dirs have it", () => {
-    const first = join(pathDir1, "hydra-acp-planner");
-    const second = join(pathDir2, "hydra-acp-planner");
-    makeExecutable(first);
-    makeExecutable(second);
+    const first = makeExecutable(pathDir1, "hydra-acp-planner");
+    makeExecutable(pathDir2, "hydra-acp-planner");
     const env = { PATH: [pathDir1, pathDir2].join(delimiter) };
     expect(findExternalSubcommand("planner", env)).toBe(first);
   });
@@ -115,15 +124,14 @@ describe("findExternalSubcommand", () => {
   });
 
   it("does not match unrelated binaries with similar prefixes", () => {
-    makeExecutable(join(pathDir1, "hydra-acp"));
-    makeExecutable(join(pathDir1, "hydra-acp-planner-helper"));
+    makeExecutable(pathDir1, "hydra-acp");
+    makeExecutable(pathDir1, "hydra-acp-planner-helper");
     const env = { PATH: pathDir1 };
     expect(findExternalSubcommand("planner", env)).toBeUndefined();
   });
 
   it("respects subcommand names with hyphens", () => {
-    const target = join(pathDir1, "hydra-acp-my-team");
-    makeExecutable(target);
+    const target = makeExecutable(pathDir1, "hydra-acp-my-team");
     const env = { PATH: pathDir1 };
     expect(findExternalSubcommand("my-team", env)).toBe(target);
   });
