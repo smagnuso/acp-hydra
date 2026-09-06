@@ -45,5 +45,10 @@ jobs:
       # through the package script can only ever resolve the local
       # TypeScript.
       - run: npm run typecheck
-      - run: npm test
+      # Build before test, not after: the daemon-autostart test spawns
+      # dist/cli.js. spawnDaemonDetached resolves ./daemon.js relative to
+      # its own module, so it only resolves inside dist/ and there is no
+      # in-process way to cover it. The test skips itself when dist is
+      # absent, which keeps a bare `npm test` working locally.
       - run: npm run build
+      - run: npm test
