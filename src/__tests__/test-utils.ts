@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { expect, vi } from "vitest";
 import type { MessageStream } from "../acp/framing.js";
 import type { JsonRpcMessage } from "../acp/types.js";
@@ -8,6 +9,39 @@ import type {
   NotificationHandler,
 } from "../acp/connection.js";
 import { JsonRpcConnection } from "../acp/connection.js";
+
+// Put a fake command on PATH that runs a Node script.
+//
+// The bodies these fakes need (make a directory, drop a file, write to
+// stderr, pick an exit code) have no portable shell spelling: a
+// `#!/bin/sh` script is not executable on Windows at all, and CMD's
+// equivalents diverge enough that maintaining two dialects is worse
+// than maintaining none. Node is already present, so the body is JS and
+// the platform difference collapses to how it gets invoked.
+//
+// On Windows that means a `.cmd` shim, because a `.cmd`/`.exe` is the
+// only thing CreateProcess can launch and the extensionless file npm
+// itself lays down there is a POSIX sh script (see windows-command.ts).
+export async function writeFakeCommand(
+  dir: string,
+  name: string,
+  jsBody: string,
+): Promise<void> {
+  const scriptPath = path.join(dir, `${name}.mjs`);
+  await fs.writeFile(scriptPath, jsBody, "utf8");
+  if (process.platform === "win32") {
+    await fs.writeFile(
+      path.join(dir, `${name}.cmd`),
+      `@echo off\r\nnode "%~dp0${name}.mjs" %*\r\n`,
+      "utf8",
+    );
+    return;
+  }
+  await writeExecutable(
+    path.join(dir, name),
+    `#!/bin/sh\nexec "${process.execPath}" "${scriptPath}" "$@"\n`,
+  );
+}
 
 // Assert a file carries owner-only permissions.
 //

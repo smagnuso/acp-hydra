@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { ensureNpmPackage, type NpmInstallProgress } from "./npm-install.js";
 import { paths } from "./paths.js";
 import { currentPlatformKey } from "./binary-install.js";
-import { writeExecutable } from "../__tests__/test-utils.js";
+import { writeFakeCommand } from "../__tests__/test-utils.js";
 
 describe("ensureNpmPackage", () => {
   // Save and restore PATH per test so we can simulate npm-missing and
@@ -68,10 +68,13 @@ describe("ensureNpmPackage", () => {
     // Stand up a fake `npm` in a sandboxed PATH that mimics an EACCES
     // failure: writes an error to stderr and exits non-zero. The temp
     // partial dir we created should be cleaned up.
-    const fakeNpm = path.join(pathSandbox!, "npm");
-    await writeExecutable(
-      fakeNpm,
-      "#!/bin/sh\necho 'npm ERR! code EACCES' >&2\necho 'npm ERR! syscall mkdir' >&2\nexit 243\n",
+    await writeFakeCommand(
+      pathSandbox!,
+      "npm",
+      `process.stderr.write("npm ERR! code EACCES\\n");
+process.stderr.write("npm ERR! syscall mkdir\\n");
+process.exit(243);
+`,
     );
     process.env.PATH = pathSandbox!;
 
@@ -96,10 +99,12 @@ describe("ensureNpmPackage", () => {
     // Fake npm that "succeeds" without producing anything in
     // node_modules/.bin. Models a package whose declared bin name
     // doesn't match its actual one.
-    const fakeNpm = path.join(pathSandbox!, "npm");
-    await writeExecutable(
-      fakeNpm,
-      "#!/bin/sh\nmkdir -p node_modules/.bin\nexit 0\n",
+    await writeFakeCommand(
+      pathSandbox!,
+      "npm",
+      `import { mkdirSync } from "node:fs";
+mkdirSync("node_modules/.bin", { recursive: true });
+`,
     );
     process.env.PATH = pathSandbox!;
 
@@ -126,14 +131,13 @@ describe("ensureNpmPackage", () => {
     // Absolute paths to mkdir/touch/chmod because the surrounding tests
     // set PATH to a single sandbox dir; without that, the shell builtin
     // lookup fails and the script silently produces nothing.
-    const fakeNpm = path.join(pathSandbox!, "npm");
-    // Restore /bin:/usr/bin inside the script so mkdir/touch/chmod
-    // resolve — the outer test deliberately scopes PATH to the sandbox
-    // (to prove npm-not-found surfacing), but here we need a working
-    // shell to actually drop the expected bin on disk.
-    await writeExecutable(
-      fakeNpm,
-      "#!/bin/sh\nexport PATH=/bin:/usr/bin\nmkdir -p node_modules/.bin\ntouch node_modules/.bin/progress-bin\nchmod +x node_modules/.bin/progress-bin\nexit 0\n",
+    await writeFakeCommand(
+      pathSandbox!,
+      "npm",
+      `import { mkdirSync, writeFileSync } from "node:fs";
+mkdirSync("node_modules/.bin", { recursive: true });
+writeFileSync("node_modules/.bin/progress-bin", "", { mode: 0o755 });
+`,
     );
     process.env.PATH = pathSandbox!;
     const events: NpmInstallProgress[] = [];
@@ -186,18 +190,15 @@ describe("ensureNpmPackage", () => {
   it("resolves bin from package.json when hint doesn't match the real bin name", async () => {
     // Models the qwen-code case: package is @qwen-code/qwen-code but the
     // bin it declares is "qwen", not the basename "qwen-code".
-    const fakeNpm = path.join(pathSandbox!, "npm");
-    await writeExecutable(
-      fakeNpm,
-      [
-        "#!/bin/sh",
-        "export PATH=/bin:/usr/bin",
-        'mkdir -p node_modules/.bin "node_modules/@qwen-code/qwen-code"',
-        'printf \'{"bin":{"qwen":"./cli.js"}}\' > "node_modules/@qwen-code/qwen-code/package.json"',
-        "touch node_modules/.bin/qwen",
-        "chmod +x node_modules/.bin/qwen",
-        "exit 0",
-      ].join("\n"),
+    await writeFakeCommand(
+      pathSandbox!,
+      "npm",
+      `import { mkdirSync, writeFileSync } from "node:fs";
+mkdirSync("node_modules/.bin", { recursive: true });
+mkdirSync("node_modules/@qwen-code/qwen-code", { recursive: true });
+writeFileSync("node_modules/@qwen-code/qwen-code/package.json", '{"bin":{"qwen":"./cli.js"}}');
+writeFileSync("node_modules/.bin/qwen", "", { mode: 0o755 });
+`,
     );
     process.env.PATH = pathSandbox!;
 
@@ -213,18 +214,15 @@ describe("ensureNpmPackage", () => {
   it("falls back to basename when package.json declares bin as a string", async () => {
     // bin: "./cli.js" (string form) — npm populates .bin/<basename>, so the
     // basename heuristic handles it correctly.
-    const fakeNpm = path.join(pathSandbox!, "npm");
-    await writeExecutable(
-      fakeNpm,
-      [
-        "#!/bin/sh",
-        "export PATH=/bin:/usr/bin",
-        'mkdir -p node_modules/.bin node_modules/string-bin-pkg',
-        'printf \'{"bin":"./cli.js"}\' > node_modules/string-bin-pkg/package.json',
-        "touch node_modules/.bin/string-bin-pkg",
-        "chmod +x node_modules/.bin/string-bin-pkg",
-        "exit 0",
-      ].join("\n"),
+    await writeFakeCommand(
+      pathSandbox!,
+      "npm",
+      `import { mkdirSync, writeFileSync } from "node:fs";
+mkdirSync("node_modules/.bin", { recursive: true });
+mkdirSync("node_modules/string-bin-pkg", { recursive: true });
+writeFileSync("node_modules/string-bin-pkg/package.json", '{"bin":"./cli.js"}');
+writeFileSync("node_modules/.bin/string-bin-pkg", "", { mode: 0o755 });
+`,
     );
     process.env.PATH = pathSandbox!;
 
@@ -238,18 +236,16 @@ describe("ensureNpmPackage", () => {
   });
 
   it("picks matching key from a multi-bin package.json via basename", async () => {
-    const fakeNpm = path.join(pathSandbox!, "npm");
-    await writeExecutable(
-      fakeNpm,
-      [
-        "#!/bin/sh",
-        "export PATH=/bin:/usr/bin",
-        'mkdir -p node_modules/.bin node_modules/multi-tool',
-        'printf \'{"bin":{"multi-tool":"./main.js","multi-tool-legacy":"./legacy.js"}}\' > node_modules/multi-tool/package.json',
-        "touch node_modules/.bin/multi-tool node_modules/.bin/multi-tool-legacy",
-        "chmod +x node_modules/.bin/multi-tool node_modules/.bin/multi-tool-legacy",
-        "exit 0",
-      ].join("\n"),
+    await writeFakeCommand(
+      pathSandbox!,
+      "npm",
+      `import { mkdirSync, writeFileSync } from "node:fs";
+mkdirSync("node_modules/.bin", { recursive: true });
+mkdirSync("node_modules/multi-tool", { recursive: true });
+writeFileSync("node_modules/multi-tool/package.json", '{"bin":{"multi-tool":"./main.js","multi-tool-legacy":"./legacy.js"}}');
+writeFileSync("node_modules/.bin/multi-tool", "", { mode: 0o755 });
+writeFileSync("node_modules/.bin/multi-tool-legacy", "", { mode: 0o755 });
+`,
     );
     process.env.PATH = pathSandbox!;
 
@@ -264,18 +260,16 @@ describe("ensureNpmPackage", () => {
   });
 
   it("includes declared bins in the error when no candidate matches", async () => {
-    const fakeNpm = path.join(pathSandbox!, "npm");
-    await writeExecutable(
-      fakeNpm,
-      [
-        "#!/bin/sh",
-        "export PATH=/bin:/usr/bin",
-        'mkdir -p node_modules/.bin node_modules/ambiguous-pkg',
-        'printf \'{"bin":{"foo":"./foo.js","bar":"./bar.js"}}\' > node_modules/ambiguous-pkg/package.json',
-        "touch node_modules/.bin/foo node_modules/.bin/bar",
-        "chmod +x node_modules/.bin/foo node_modules/.bin/bar",
-        "exit 0",
-      ].join("\n"),
+    await writeFakeCommand(
+      pathSandbox!,
+      "npm",
+      `import { mkdirSync, writeFileSync } from "node:fs";
+mkdirSync("node_modules/.bin", { recursive: true });
+mkdirSync("node_modules/ambiguous-pkg", { recursive: true });
+writeFileSync("node_modules/ambiguous-pkg/package.json", '{"bin":{"foo":"./foo.js","bar":"./bar.js"}}');
+writeFileSync("node_modules/.bin/foo", "", { mode: 0o755 });
+writeFileSync("node_modules/.bin/bar", "", { mode: 0o755 });
+`,
     );
     process.env.PATH = pathSandbox!;
 
@@ -324,10 +318,13 @@ describe("ensureNpmPackage", () => {
   });
 
   it("swallows callback exceptions so a throwing subscriber doesn't abort the install", async () => {
-    const fakeNpm = path.join(pathSandbox!, "npm");
-    await writeExecutable(
-      fakeNpm,
-      "#!/bin/sh\nexport PATH=/bin:/usr/bin\nmkdir -p node_modules/.bin\ntouch node_modules/.bin/boom-bin\nchmod +x node_modules/.bin/boom-bin\nexit 0\n",
+    await writeFakeCommand(
+      pathSandbox!,
+      "npm",
+      `import { mkdirSync, writeFileSync } from "node:fs";
+mkdirSync("node_modules/.bin", { recursive: true });
+writeFileSync("node_modules/.bin/boom-bin", "", { mode: 0o755 });
+`,
     );
     process.env.PATH = pathSandbox!;
     const binPath = await ensureNpmPackage({
