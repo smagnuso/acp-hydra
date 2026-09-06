@@ -255,7 +255,10 @@ describe("ExtensionManager", () => {
       expect(info[0]?.enabled).toBe(true);
       expect(info[0]?.restartCount).toBe(0);
       expect(info[0]?.startedAt).toBeGreaterThan(0);
-      expect(info[0]?.logPath).toContain("extensions/lst/current.log");
+      // A filesystem path, so it carries native separators.
+      expect(info[0]?.logPath).toContain(
+        path.join("extensions", "lst", "current.log"),
+      );
     });
 
     it("stopByName() suppresses auto-restart (manuallyStopped flag)", async () => {

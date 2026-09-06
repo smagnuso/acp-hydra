@@ -23,6 +23,36 @@ import { expandHome } from "./config.js";
 // trigger a collapse — matches `substitute-in-file-name`'s behavior of
 // leaving "~foo/bar" alone.
 //
+// On Windows an absolute path begins with a drive letter, so "start over
+// from root" is spelled `C:\` rather than a second slash. Without this,
+// the gesture the doubled-slash rule exists to catch — a stale buffer
+// followed by a freshly typed absolute path — does not collapse there at
+// all, and the user is left editing `/leftover/C:\real\path`.
+//
+// A drive letter followed by a separator cannot grow into anything else,
+// so it is safe to collapse on immediately; that is why this applies to
+// the commit boundary as well as the permissive one.
+//
+// Gated to Windows: a colon is a legal character in a POSIX filename, and
+// treating one as a trigger there would eat a real path component.
+function driveLetterBoundary(text: string): number {
+  if (process.platform !== "win32") {
+    return 0;
+  }
+  let boundary = 0;
+  for (let i = 1; i + 1 < text.length; i++) {
+    if (text[i] !== ":") {
+      continue;
+    }
+    const letter = text[i - 1] ?? "";
+    const after = text[i + 1];
+    if (/^[A-Za-z]$/.test(letter) && (after === "\\" || after === "/")) {
+      boundary = i - 1;
+    }
+  }
+  return boundary;
+}
+
 export function pathShadowBoundary(text: string): number {
   let trigger = -1;
   for (let i = 0; i < text.length - 1; i++) {
@@ -39,7 +69,7 @@ export function pathShadowBoundary(text: string): number {
       }
     }
   }
-  return trigger === -1 ? 0 : trigger + 1;
+  return Math.max(trigger === -1 ? 0 : trigger + 1, driveLetterBoundary(text));
 }
 
 // Stricter sibling of pathShadowBoundary for live, destructive collapsing:
@@ -76,7 +106,7 @@ export function pathShadowCommitBoundary(text: string): number {
       }
     }
   }
-  return boundary;
+  return Math.max(boundary, driveLetterBoundary(text));
 }
 
 // Applies pathShadowBoundary and drops the shadowed prefix.
