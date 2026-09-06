@@ -102,12 +102,20 @@ afterEach(() => {
     // fails with ENOTEMPTY. maxRetries/retryDelay tells Node to retry on
     // exactly that code (also EBUSY/EMFILE/ENFILE/EPERM), which gives
     // those stragglers enough time to land and be swept on the next pass.
-    fs.rmSync(currentHome, {
-      recursive: true,
-      force: true,
-      maxRetries: 5,
-      retryDelay: 10,
-    });
+    // The retry budget has to cover a loaded CI runner, not just a fast
+    // dev box; 5x10ms was enough locally and not on macOS runners.
+    try {
+      fs.rmSync(currentHome, {
+        recursive: true,
+        force: true,
+        maxRetries: 20,
+        retryDelay: 50,
+      });
+    } catch {
+      // A straggler that outlasts even that budget must not fail a test
+      // that already passed. The per-worker root this lives under is
+      // removed wholesale in afterAll, so nothing leaks beyond the run.
+    }
     currentHome = undefined;
   }
 });
