@@ -154,7 +154,13 @@ export async function applyCarry(
     }
     try {
       await fs.mkdir(path.dirname(to), { recursive: true });
-      await fs.cp(from, to, { recursive: stat.isDirectory() });
+      // dereference: carry the CONTENT, never the link. fs.cp given a
+      // symlink copies the link itself, so a carried `.env` that is a
+      // symlink (dotfile managers, direnv, monorepo layouts: common)
+      // would arrive in the workspace still pointing at the source, and
+      // the first write to it inside the workspace would edit the user's
+      // real file. That is precisely the isolation this provides.
+      await fs.cp(from, to, { recursive: stat.isDirectory(), dereference: true });
       copied.push(entry);
     } catch {
       skipped.push(entry);

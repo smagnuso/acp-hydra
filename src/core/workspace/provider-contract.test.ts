@@ -581,11 +581,20 @@ describe("copy provider specifics", () => {
       if (!res.ok) {
         return;
       }
+      // The workspace must be a real directory. fs.cp given a symlink
+      // copies the LINK, so the workspace would have been an alias for
+      // the user's own tree: .git visible through it, and every write
+      // inside the "isolated" workspace landing in the source. The
+      // .git assertion below is the symptom; this is the disease.
+      expect((await fs.lstat(res.workspace.path)).isSymbolicLink()).toBe(false);
       await expect(fs.access(path.join(res.workspace.path, ".git"))).rejects.toThrow();
-      // The rest of the tree still came across.
+      // The rest of the tree still came across, as content rather than
+      // as a view onto the original.
       expect(await fs.readFile(path.join(res.workspace.path, "file.txt"), "utf8")).toBe(
         "original\n",
       );
+      await fs.writeFile(path.join(res.workspace.path, "file.txt"), "changed\n");
+      expect(await fs.readFile(path.join(real, "file.txt"), "utf8")).toBe("original\n");
     },
   );
 });

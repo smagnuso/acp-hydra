@@ -115,6 +115,29 @@ describe("applyCarry", () => {
     expect(await fs.readFile(path.join(ws, "config/secrets.json"), "utf8")).toBe("{}\n");
   });
 
+  it.skipIf(process.platform === "win32")(
+    "carries the content of a symlinked file, not the link",
+    async () => {
+      // A carried `.env` is very often a symlink (dotfile managers,
+      // direnv, monorepo layouts). fs.cp copies a symlink as a symlink,
+      // so without dereference the workspace's copy still points at the
+      // source and the first write inside the workspace edits the user's
+      // real file — the exact isolation this feature exists to give.
+      const src = await tmp("hydra-carry-link-src-");
+      const ws = await tmp("hydra-carry-link-ws-");
+      const outside = path.join(src, "real.env");
+      await fs.writeFile(outside, "SECRET=1\n");
+      await fs.symlink(outside, path.join(src, ".env"));
+
+      const res = await applyCarry(src, ws, [".env"]);
+      expect(res.copied).toEqual([".env"]);
+      expect((await fs.lstat(path.join(ws, ".env"))).isSymbolicLink()).toBe(false);
+
+      await fs.writeFile(path.join(ws, ".env"), "TAMPERED=1\n");
+      expect(await fs.readFile(outside, "utf8")).toBe("SECRET=1\n");
+    },
+  );
+
   it("refuses to escape either tree", async () => {
     // Carry entries are repo config, and repo config can arrive on a
     // branch someone else wrote.
