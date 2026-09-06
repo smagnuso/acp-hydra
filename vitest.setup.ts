@@ -121,5 +121,18 @@ afterEach(() => {
 });
 
 afterAll(() => {
-  fs.rmSync(workerRoot, { recursive: true, force: true });
+  // Same race as afterEach, one level up: hardening only the per-test
+  // sweep just moved the ENOTEMPTY here, where it fails the whole file
+  // rather than one test. The root is a mkdtemp under os.tmpdir(), so
+  // the worst case of giving up is a directory the OS reaps later.
+  try {
+    fs.rmSync(workerRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 50,
+    });
+  } catch {
+    // Deliberately ignored; see above.
+  }
 });

@@ -38,7 +38,7 @@ describe("cwd bar field", () => {
   it("shows one openable span for an ordinary session", () => {
     const out = groups({ cwd: SRC });
     expect(out).toHaveLength(1);
-    expect(out[0]?.chunks[0]?.text).toBe("~/proj");
+    expect(out[0]?.chunks[0]?.text).toBe(`~${path.sep}proj`);
     // The double-click value is the ABSOLUTE path, not the ~-abbreviated
     // display form.
     expect(out[0]?.chunks[0]?.value).toBe(SRC);
@@ -49,7 +49,7 @@ describe("cwd bar field", () => {
     expect(out.map((g) => g.id)).toEqual(["cwd", "cwdWorkspace"]);
     // Each span opens what its text names, so neither has to lie about
     // where a double-click goes.
-    expect(out[0]?.chunks[0]?.text).toBe("~/proj");
+    expect(out[0]?.chunks[0]?.text).toBe(`~${path.sep}proj`);
     expect(out[0]?.chunks[0]?.value).toBe(SRC);
     expect(out[1]?.chunks[0]?.text).toBe("[feature-x]");
     expect(out[1]?.chunks[0]?.value).toBe(WS);
@@ -62,7 +62,7 @@ describe("cwd bar field", () => {
 
   it("never hands a formatted display string to the open action", () => {
     // Regression. The label used to be baked into `cwd` upstream, so the
-    // double-click tried to open "~/proj [feature-x]" as a directory.
+    // double-click tried to open `~${path.sep}proj [feature-x]` as a directory.
     for (const g of groups(isolated)) {
       for (const chunk of g.chunks) {
         expect(chunk.value).not.toMatch(/[[\]]/);
@@ -107,7 +107,7 @@ describe("cwd bar field", () => {
     );
     const text = left.flatMap((g) => g.chunks.map((c) => c.text)).join("");
     // Brackets wrap the field as a whole, not each group.
-    expect(text).toBe("(~/proj[feature-x])");
+    expect(text).toBe(`(~${path.sep}proj[feature-x])`);
     for (const g of left) {
       for (const c of g.chunks) {
         expect(c.token).toBe("rule-meta");
