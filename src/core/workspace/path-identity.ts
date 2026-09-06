@@ -198,8 +198,20 @@ export function isSourceTreeBreach(
   return isWithin(editedPath, sourceCwd);
 }
 
-// Strict containment: `child` is under `parent`, and not `parent` itself.
-function isWithin(child: string, parent: string): boolean {
+/**
+ * Strict containment: `child` is under `parent`, and not `parent` itself.
+ *
+ * Exported because the alternative is what the stale-write check used to
+ * do: `child.startsWith(`${parent}/`)`, which is a containment test that
+ * only works on POSIX and silently answers "no" to everything on
+ * Windows.
+ *
+ * Known limit: this compares spellings, not inodes. A `parent` reached
+ * through a symlink and a `child` already resolved through it will not
+ * match. Canonicalizing here would mean filesystem I/O on a per-edit
+ * path, so the fix belongs at workspace-record creation instead.
+ */
+export function isWithin(child: string, parent: string): boolean {
   const rel = path.relative(path.resolve(parent), path.resolve(child));
   if (rel.length === 0 || rel.startsWith("..") || path.isAbsolute(rel)) {
     return false;

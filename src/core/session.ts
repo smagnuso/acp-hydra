@@ -95,6 +95,7 @@ import {
   buildDepartureNote,
   buildWorkspacePreamble,
   isSourceTreeBreach,
+  isWithin,
   mentionsSourceTree,
   rewriteSourcePaths,
 } from "./workspace/path-identity.js";
@@ -3384,7 +3385,7 @@ export class Session {
       // so the write succeeds, looks fine, and can never reach the source
       // tree. Silent wasted work is worth as much noise as a breach.
       const former = this.formerWorkspace;
-      if (former !== undefined && editedPath.startsWith(`${former.path}/`)) {
+      if (former !== undefined && isWithin(editedPath, former.path)) {
         this.logger?.warn?.(
           `STALE WORKSPACE WRITE on session ${this.sessionId}: the agent wrote ${editedPath}, ` +
             `which is inside the workspace this session already left. That work will not reach ` +

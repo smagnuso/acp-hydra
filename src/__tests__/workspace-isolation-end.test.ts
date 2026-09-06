@@ -498,7 +498,11 @@ describe("session isolation end-to-end: leaving a workspace", () => {
     };
     (
       session as unknown as { reportIsolationBreach(p: string, t: unknown): void }
-    ).reportIsolationBreach(`${wsPath}/ghost.ts`, "tool-1");
+      // path.join, not `${wsPath}/...`: an agent reports the path its own
+      // filesystem gave it, so on Windows that is a backslash. Building
+      // the fixture with a forward slash made this pass there against a
+      // check that could not have fired in production.
+    ).reportIsolationBreach(path.join(wsPath, "ghost.ts"), "tool-1");
     expect(events).toContain("workspace.staleWrite");
   });
 
