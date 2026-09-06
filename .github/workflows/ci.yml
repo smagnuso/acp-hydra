@@ -12,20 +12,18 @@ jobs:
   test:
     name: ${{ matrix.os }} / node ${{ matrix.node }}
     runs-on: ${{ matrix.os }}
-    # Windows is informational until it goes green: hydra has never been
-    # run there, and a red leg on a platform no maintainer can reproduce
-    # on should report rather than block. Drop the flag from the matrix
-    # entry below once it passes.
-    continue-on-error: ${{ matrix.experimental == true }}
     strategy:
+      # Every leg reports. A platform-specific break is the thing this
+      # matrix exists to find, so one red cell must not cancel the run
+      # that would have shown whether it is platform- or version-shaped.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # Node 20 is the floor `engines` claims (>=20.18.1), so it is
+        # tested everywhere that floor is claimed rather than on POSIX
+        # alone. Windows is exactly where a version-specific difference
+        # in fs/child_process would otherwise surface unseen.
+        os: [ubuntu-latest, macos-latest, windows-latest]
         node: [20, 22]
-        include:
-          - os: windows-latest
-            node: 22
-            experimental: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
