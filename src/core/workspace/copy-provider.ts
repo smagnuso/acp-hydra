@@ -183,16 +183,12 @@ export class CopyProvider implements IsolationProvider {
     // project, not wherever the bytes came from.
     let contentSource =
       opts.contentFrom !== undefined ? path.resolve(opts.contentFrom) : source;
-    // Canonicalize before handing the path to fs.cp. Given a directory
-    // that is any alias of the real one, fs.cp calls `filter` for the
-    // root and then copies the dereferenced tree WITHOUT consulting it
-    // again, so every SKIP_TOP_LEVEL entry comes along — a copied .git,
-    // which is the one outcome this provider must never produce. Passing
-    // the resolved path leaves it nothing to dereference, and keeps the
-    // filter's base spelled the same way as the paths it is handed.
-    //
-    // Aliases are ordinary, not exotic: a symlinked project directory, a
-    // macOS tmpdir under /var, or a Windows 8.3 short path.
+    // Copy from the real directory, not an alias of it. Aliases are
+    // ordinary rather than exotic: a symlinked project directory, a macOS
+    // tmpdir under /var, a Windows 8.3 short path. The exclusion below no
+    // longer depends on this (it enumerates names instead of matching
+    // paths), but readdir on the resolved directory is what makes the
+    // entries it returns line up with the tree actually being copied.
     try {
       contentSource = await fs.realpath(contentSource);
     } catch {
@@ -230,20 +226,36 @@ export class CopyProvider implements IsolationProvider {
     }
     const target = path.join(root, label);
 
+    // Enumerate the top level and copy what survives SKIP_TOP_LEVEL,
+    // rather than handing fs.cp the whole tree and a `filter`.
+    //
+    // filter is not dependable for an exclusion that MUST hold. Given a
+    // source that is any alias of the real directory it is consulted for
+    // the root and then never again, so the skip silently stops applying
+    // (reproducible on Linux through a symlinked source, on every Node
+    // version). Resolving the path first was not enough on its own:
+    // Windows/Node 20 still copied .git, by some route I could not
+    // reproduce off that runner. Deciding here removes the question —
+    // a name in SKIP_TOP_LEVEL is never handed to fs.cp at all, whatever
+    // it makes of the paths below.
+    let topLevel: string[];
     try {
-      await fs.cp(contentSource, target, {
-        recursive: true,
-        errorOnExist: false,
-        force: true,
-        filter: (src) => {
-          const rel = path.relative(contentSource, src);
-          if (rel.length === 0) {
-            return true;
-          }
-          const top = rel.split(path.sep)[0];
-          return top === undefined || !SKIP_TOP_LEVEL.has(top);
-        },
-      });
+      topLevel = await fs.readdir(contentSource);
+    } catch (err) {
+      return { ok: false, reason: `copy failed: ${String(err)}` };
+    }
+    try {
+      await fs.mkdir(target, { recursive: true });
+      for (const name of topLevel) {
+        if (SKIP_TOP_LEVEL.has(name)) {
+          continue;
+        }
+        await fs.cp(path.join(contentSource, name), path.join(target, name), {
+          recursive: true,
+          errorOnExist: false,
+          force: true,
+        });
+      }
     } catch (err) {
       await fs.rm(target, { recursive: true, force: true }).catch(() => undefined);
       return { ok: false, reason: `copy failed: ${String(err)}` };
