@@ -11,6 +11,14 @@ import {
 // The whole point of this module is behavior on a platform the suite does
 // not run on, so `platform` is injected and the fixture files are real.
 // statSync does not care which OS named them.
+//
+// Paths compare case-insensitively. PATHEXT is conventionally uppercase
+// and Windows' filesystem is not case-sensitive, so probing there
+// legitimately resolves `npm.cmd` as `npm.CMD`. Which casing comes back
+// is not a behavioural difference; CreateProcess treats them the same.
+const eqPath = (actual: string, expected: string): void => {
+  expect(actual.toLowerCase()).toBe(expected.toLowerCase());
+};
 let dir: string;
 let binDir: string;
 let spacedDir: string;
@@ -44,23 +52,19 @@ describe("resolveWindowsCommand", () => {
   });
 
   it("finds a bare command on PATH via PATHEXT", () => {
-    expect(resolveWindowsCommand("npm", { env, platform: "win32" })).toBe(
-      join(dir, "npm.cmd"),
-    );
+    eqPath(resolveWindowsCommand("npm", { env, platform: "win32" }), join(dir, "npm.cmd"));
   });
 
   it("prefers the .cmd sibling over an extensionless npm sh shim", () => {
     // The regression this module exists for: the extensionless file DOES
     // exist, so any "does it exist" check picks the unrunnable one.
     const shim = join(binDir, "claude-code-acp");
-    expect(resolveWindowsCommand(shim, { env, platform: "win32" })).toBe(
-      `${shim}.cmd`,
-    );
+    eqPath(resolveWindowsCommand(shim, { env, platform: "win32" }), `${shim}.cmd`);
   });
 
   it("leaves a command that already carries an extension alone", () => {
     const exe = join(dir, "real-tool.exe");
-    expect(resolveWindowsCommand(exe, { env, platform: "win32" })).toBe(exe);
+    eqPath(resolveWindowsCommand(exe, { env, platform: "win32" }), exe);
   });
 
   it("returns the input unchanged when nothing resolves", () => {
@@ -71,9 +75,7 @@ describe("resolveWindowsCommand", () => {
 
   it("searches every PATH entry", () => {
     const multi = { ...env, PATH: [join(dir, "nope"), dir].join(delimiter) };
-    expect(
-      resolveWindowsCommand("npm", { env: multi, platform: "win32" }),
-    ).toBe(join(dir, "npm.cmd"));
+    eqPath(resolveWindowsCommand("npm", { env: multi, platform: "win32" }), join(dir, "npm.cmd"));
   });
 });
 
@@ -116,7 +118,7 @@ describe("resolveSpawnTarget", () => {
       platform: "win32",
     });
     expect(t.shell).toBe(true);
-    expect(t.command).toBe(join(dir, "npm.cmd"));
+    eqPath(t.command, join(dir, "npm.cmd"));
     expect(t.args).toEqual(["install", '"a b"']);
   });
 
@@ -130,13 +132,13 @@ describe("resolveSpawnTarget", () => {
       platform: "win32",
     });
     expect(t.shell).toBe(true);
-    expect(t.command).toBe(`"${join(spacedDir, "npm.cmd")}"`);
+    eqPath(t.command, `"${join(spacedDir, "npm.cmd")}"`);
   });
 
   it("does not ask for a shell for a real executable", () => {
     const t = resolveSpawnTarget("real-tool", [], { env, platform: "win32" });
     expect(t.shell).toBe(false);
-    expect(t.command).toBe(join(dir, "real-tool.exe"));
+    eqPath(t.command, join(dir, "real-tool.exe"));
   });
 
   it("leaves an unresolvable command to spawn's own ENOENT", () => {

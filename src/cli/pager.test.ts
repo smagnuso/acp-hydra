@@ -80,6 +80,7 @@ describe("openPager", () => {
     const fake = fakeSpawn();
     openPager({
       isTTY: true,
+      platform: "linux",
       env: {},
       spawn: fake.spawn as unknown as typeof import("node:child_process").spawn,
     });
@@ -101,6 +102,7 @@ describe("openPager", () => {
     const fake = fakeSpawn();
     openPager({
       isTTY: true,
+      platform: "linux",
       env: {},
       spawn: fake.spawn as unknown as typeof import("node:child_process").spawn,
     });
@@ -112,6 +114,7 @@ describe("openPager", () => {
     const fake = fakeSpawn();
     openPager({
       isTTY: true,
+      platform: "linux",
       env: { LESS: "S" },
       spawn: fake.spawn as unknown as typeof import("node:child_process").spawn,
     });
@@ -158,5 +161,31 @@ describe("openPager", () => {
     fake.finish();
     await flushPromise;
     expect(resolved).toBe(true);
+  });
+
+  it("does not default to a pager on Windows", () => {
+    // `less` is not present on a stock Windows install, and with
+    // shell:true its absence is not a spawn error, so paging by default
+    // there would route the command's whole output into a dead pipe.
+    const fake = fakeSpawn();
+    const handle = openPager({
+      isTTY: true,
+      env: {},
+      platform: "win32",
+      spawn: fake.spawn as unknown as typeof import("node:child_process").spawn,
+    });
+    expect(handle.stream).toBe(process.stdout);
+    expect(fake.spawn).not.toHaveBeenCalled();
+  });
+
+  it("still honours an explicit pager on Windows", () => {
+    const fake = fakeSpawn();
+    openPager({
+      isTTY: true,
+      env: { PAGER: "morelike" },
+      platform: "win32",
+      spawn: fake.spawn as unknown as typeof import("node:child_process").spawn,
+    });
+    expect(fake.spawn.mock.calls[0]![0]).toBe("morelike");
   });
 });
