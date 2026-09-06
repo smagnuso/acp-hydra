@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { paths } from "../core/paths.js";
 import { readDaemonPidFile, isProcessAlive } from "../core/daemon-pidfile.js";
 import { writeServiceToken } from "../core/service-token.js";
+import { pickFreePort } from "./test-utils.js";
 
 const REPO_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -34,12 +35,6 @@ const CLI_BUNDLE = path.join(REPO_ROOT, "dist", "cli.js");
 const built = existsSync(CLI_BUNDLE);
 const describeBuilt = built ? describe : describe.skip;
 
-// Not DEFAULT_DAEMON_PORT: a developer running this locally very likely
-// has their own daemon on it, and binding it here would either collide
-// or, worse, quietly pass by finding theirs.
-function ephemeralPort(): number {
-  return 49_152 + Math.floor(Math.random() * 15_000);
-}
 
 let daemonPid: number | undefined;
 
@@ -101,7 +96,7 @@ async function runCli(
 
 describeBuilt("daemon autostart (detached)", () => {
   it("starts a detached daemon and finds it again", async () => {
-    const port = ephemeralPort();
+    const port = await pickFreePort();
     await fsp.mkdir(paths.home(), { recursive: true });
     await fsp.writeFile(
       paths.config(),
@@ -134,7 +129,7 @@ describeBuilt("daemon autostart (detached)", () => {
   }, 90_000);
 
   it("reports the daemon as running once it is up", async () => {
-    const port = ephemeralPort();
+    const port = await pickFreePort();
     await fsp.mkdir(paths.home(), { recursive: true });
     await fsp.writeFile(
       paths.config(),

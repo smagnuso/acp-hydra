@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import * as net from "node:net";
 import * as path from "node:path";
 import { expect, vi } from "vitest";
 import type { MessageStream } from "../acp/framing.js";
@@ -45,6 +46,31 @@ export async function writeFakeCommand(
     path.join(dir, name),
     `#!/bin/sh\nexec "${process.execPath}" "${scriptPath}" "$@"\n`,
   );
+}
+
+// A port that can actually be bound, chosen by the OS.
+//
+// A random number in the dynamic range is not safe on Windows:
+// WinNAT/Hyper-V reserve blocks inside 49152-65535, and binding one of
+// those fails with EACCES (permission denied) rather than EADDRINUSE, so
+// a test picking blind fails intermittently for a reason that looks
+// nothing like a port conflict. Asking for port 0 never yields a
+// reserved port. The probe listener is closed before the caller binds,
+// which leaves a small race, but a far smaller one than guessing.
+export function pickFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.on("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const addr = probe.address();
+      if (addr === null || typeof addr === "string") {
+        probe.close(() => reject(new Error("no port was assigned")));
+        return;
+      }
+      const { port } = addr;
+      probe.close(() => resolve(port));
+    });
+  });
 }
 
 // Assert a file carries owner-only permissions.

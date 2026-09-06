@@ -26,6 +26,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { paths } from "../core/paths.js";
 import { writeServiceToken } from "../core/service-token.js";
+import { pickFreePort } from "./test-utils.js";
 
 const REPO_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -36,9 +37,11 @@ const CLI_BUNDLE = path.join(REPO_ROOT, "dist", "cli.js");
 const describeBuilt = existsSync(CLI_BUNDLE) ? describe : describe.skip;
 
 const TOKEN = "hydra_token_0123456789abcdef0123456789abcdef";
-// Both sides deliberately share a port so the second daemon collides
-// with the first. That collision is the mechanism being reproduced.
-const SHARED_PORT = 49_152 + Math.floor(Math.random() * 15_000);
+// Both sides deliberately share one port so the second daemon collides
+// with the first: that collision is the mechanism being reproduced.
+// Chosen by the OS rather than at random, because Windows reserves
+// blocks inside the dynamic range and binding one fails with EACCES.
+let sharedPort = 0;
 
 // The relative value handed to both processes. Identical string, two
 // different resolved directories.
@@ -84,7 +87,7 @@ async function seedHome(dir: string): Promise<void> {
   await fsp.mkdir(home, { recursive: true });
   await fsp.writeFile(
     path.join(home, "config.json"),
-    JSON.stringify({ daemon: { port: SHARED_PORT, logLevel: "error" } }),
+    JSON.stringify({ daemon: { port: sharedPort, logLevel: "error" } }),
     "utf8",
   );
   // writeServiceToken targets the ambient home, so write directly.
@@ -107,6 +110,7 @@ afterEach(async () => {
 
 describeBuilt("relative HYDRA_ACP_HOME across two working directories", () => {
   it("fails legibly rather than with a bare timeout", async () => {
+    sharedPort = await pickFreePort();
     const base = paths.home();
     const dirA = path.join(base, "launched-from-a");
     const dirB = path.join(base, "launched-from-b");

@@ -21,6 +21,7 @@ import { ACP_PROTOCOL_VERSION } from "../acp/types-jsonrpc.js";
 import { paths } from "../core/paths.js";
 import { readDaemonPidFile, isProcessAlive } from "../core/daemon-pidfile.js";
 import { writeServiceToken } from "../core/service-token.js";
+import { pickFreePort } from "./test-utils.js";
 
 const REPO_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -32,12 +33,9 @@ const describeBuilt = existsSync(CLI_BUNDLE) ? describe : describe.skip;
 
 const TOKEN = "hydra_token_0123456789abcdef0123456789abcdef";
 
-function ephemeralPort(): number {
-  return 49_152 + Math.floor(Math.random() * 15_000);
-}
 
 async function seedHome(): Promise<number> {
-  const port = ephemeralPort();
+  const port = await pickFreePort();
   await fsp.mkdir(paths.home(), { recursive: true });
   await fsp.writeFile(
     paths.config(),
