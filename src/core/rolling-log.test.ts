@@ -1,7 +1,8 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import createPinoRoll from "pino-roll";
 import { resolveRollingLogPath } from "./rolling-log.js";
 
 let dir: string;
@@ -24,20 +25,53 @@ describe("resolveRollingLogPath", () => {
   it("falls back to the newest rotated file when current.log is absent", async () => {
     // What Windows looks like: pino-roll could not make the symlink, so
     // only the numbered files exist.
-    writeFileSync(join(dir, "daemon.log.1"), "old\n");
-    writeFileSync(join(dir, "daemon.log.9"), "newest\n");
-    writeFileSync(join(dir, "daemon.log.10"), "actually newest\n");
+    writeFileSync(join(dir, "daemon.1.log"), "old\n");
+    writeFileSync(join(dir, "daemon.9.log"), "newest\n");
+    writeFileSync(join(dir, "daemon.10.log"), "actually newest\n");
     expect(await resolveRollingLogPath(join(dir, "current.log"))).toBe(
-      join(dir, "daemon.log.10"),
+      join(dir, "daemon.10.log"),
     );
   });
 
   it("orders numerically, not lexically", async () => {
-    writeFileSync(join(dir, "x.log.2"), "");
-    writeFileSync(join(dir, "x.log.11"), "");
-    expect(await resolveRollingLogPath(join(dir, "current.log"))).toBe(
-      join(dir, "x.log.11"),
-    );
+    writeFileSync(join(dir, "x.2.log"), "");
+    writeFileSync(join(dir, "x.11.log"), "");
+    expect(await resolveRollingLogPath(join(dir, "current.log"))).toBe(join(dir, "x.11.log"));
+  });
+
+  it("also matches a base configured without an extension", async () => {
+    writeFileSync(join(dir, "daemon.7"), "");
+    expect(await resolveRollingLogPath(join(dir, "current.log"))).toBe(join(dir, "daemon.7"));
+  });
+
+  it("finds the file pino-roll actually wrote", async () => {
+    // The guard that matters. Every fixture above is a name this file
+    // invented, so they all agreed with each other while disagreeing with
+    // the library: pino-roll splits the base on its extension and writes
+    // `daemon.1.log`, but this resolver looked for `daemon.log.1`. The
+    // fallback therefore matched nothing on the one platform that needs
+    // it, and no test noticed because none of them had ever seen a real
+    // rotated file. Drive the real thing instead.
+    const stream = await createPinoRoll({
+      file: join(dir, "svc.log"),
+      size: "5m",
+      mkdir: true,
+      symlink: false, // as on Windows, where the symlink cannot be made
+      limit: { count: 5 },
+    });
+    stream.write("marker line\n");
+    // pino-roll opens the file asynchronously, so flush() can return
+    // before there is anything on disk to find.
+    await expect
+      .poll(async () => readdirSync(dir).length, { timeout: 5_000 })
+      .toBeGreaterThan(0);
+
+    const resolved = await resolveRollingLogPath(join(dir, "current.log"));
+    expect(resolved).not.toBe(join(dir, "current.log"));
+    await expect
+      .poll(() => readFileSync(resolved, "utf8"), { timeout: 5_000 })
+      .toContain("marker line");
+    stream.destroy();
   });
 
   it("returns the requested path when no rotated sibling exists", async () => {

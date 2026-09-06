@@ -54,9 +54,16 @@ export async function resolveRollingLogPath(logPath: string): Promise<string> {
   }
   let best: { name: string; n: number } | undefined;
   for (const name of entries) {
-    // pino-roll's numbering is a trailing `.<N>` on the configured base
-    // file, e.g. `daemon.log.3` or `slack.log.12`.
-    const m = /\.(\d+)$/.exec(name);
+    // pino-roll splits the configured base on its extension and puts the
+    // number in between, so `daemon.log` rotates to `daemon.3.log`, not
+    // `daemon.log.3`. The trailing form is what a base configured with no
+    // extension at all produces, and is matched too.
+    //
+    // This is load-bearing only on Windows, where there is no current.log
+    // symlink to find first — an earlier version looked for the trailing
+    // form alone, so the fallback matched nothing and every reader
+    // reported "no log file" while the logs sat right there.
+    const m = /\.(\d+)(?:\.[^.]+)?$/.exec(name);
     if (!m) {
       continue;
     }

@@ -11,7 +11,16 @@ import {
 const temps: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(temps.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })));
+  // Retry: a hook killed at its timeout may not have released the
+  // workspace yet, and Windows refuses to remove a directory that is any
+  // live process's cwd. On POSIX the first attempt always wins.
+  await Promise.all(
+    temps
+      .splice(0)
+      .map((d) =>
+        fs.rm(d, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }),
+      ),
+  );
 });
 
 async function tmp(prefix: string): Promise<string> {

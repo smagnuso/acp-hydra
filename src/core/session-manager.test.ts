@@ -1233,14 +1233,20 @@ describe("SessionManager: history persistence", () => {
       pred: (v: T | undefined) => boolean,
     ): Promise<T | undefined> {
       // Returns as soon as the predicate holds, so a generous ceiling costs
-      // nothing on a fast disk. 300ms was not enough for the debounced meta
+      // nothing on a fast disk. 30x10ms was not long enough for the meta
       // write to land on a Windows runner.
-      for (let i = 0; i < 300; i++) {
+      //
+      // Waits are longer rather than more numerous on purpose: each check
+      // opens meta.json while the writer is renaming onto it, which Windows
+      // is far less tolerant of than POSIX. A first pass at this kept the
+      // 10ms interval and simply raised the count, and a neighbouring test
+      // that had been passing started failing.
+      for (let i = 0; i < 60; i++) {
         const v = await check();
         if (pred(v)) {
           return v;
         }
-        await new Promise((r) => setTimeout(r, 10));
+        await new Promise((r) => setTimeout(r, 50));
       }
       return check();
     }
