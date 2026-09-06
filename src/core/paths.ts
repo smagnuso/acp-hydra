@@ -66,10 +66,41 @@ export function detectTestRunner(): string | undefined {
   return undefined;
 }
 
+// Warned at most once per process. hydraHome() is called on every
+// paths.* access, so an unguarded write here would be a torrent.
+let warnedRelativeHome = false;
+
+// A relative HYDRA_ACP_HOME resolves against the CURRENT WORKING
+// DIRECTORY, so two processes handed the identical value root themselves
+// in different places when launched from different directories. An
+// editor launches the shim with the project directory as cwd; a human
+// starts the daemon from wherever their shell happens to be. The result
+// is a client that cannot see a running daemon, starts a second one,
+// and watches it fail to bind the port the first one holds.
+//
+// Not an error, because a deliberate per-project home is a legitimate
+// thing to want. But it is never what someone means for a daemon that
+// outlives the shell that started it, so say so once, with both the raw
+// value and what it actually resolved to.
+function warnIfRelativeHome(override: string, resolved: string): void {
+  if (warnedRelativeHome || path.isAbsolute(override)) {
+    return;
+  }
+  warnedRelativeHome = true;
+  process.stderr.write(
+    `hydra-acp: ${ROOT_ENV} is relative (${JSON.stringify(override)}); ` +
+      `resolved against the current directory to ${resolved}. Processes ` +
+      `started from elsewhere will use a different home and will not see ` +
+      `each other's daemon. Set an absolute path.\n`,
+  );
+}
+
 export function hydraHome(): string {
   const override = process.env[ROOT_ENV];
   if (override && override.length > 0) {
-    return path.resolve(override);
+    const resolved = path.resolve(override);
+    warnIfRelativeHome(override, resolved);
+    return resolved;
   }
   // Safety net: under ANY test runner, never silently fall back to the
   // developer's real ~/.hydra-acp. vitest.setup.ts clamps HYDRA_ACP_HOME to

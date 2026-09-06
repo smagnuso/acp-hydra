@@ -139,5 +139,17 @@ describeBuilt("relative HYDRA_ACP_HOME across two working directories", () => {
       message,
       "a readiness timeout with no reason is exactly what #9 reports",
     ).toMatch(/EADDRINUSE|address already in use|daemon exited during startup/i);
+
+    // And the recovery half: name the daemon that is actually holding
+    // the port, and the home it is rooted in. Without this the user is
+    // told only that the daemon THEY just started died, while nothing
+    // mentions the one that was already there.
+    expect(message).toContain("already listening");
+    expect(message).toContain(path.join(dirA, RELATIVE_HOME));
+    expect(message).toContain(path.join(dirB, RELATIVE_HOME));
+
+    // The relative value itself is called out, once, by whichever
+    // process resolved it.
+    expect(message).toMatch(/HYDRA_ACP_HOME is relative/);
   }, 180_000);
 });
