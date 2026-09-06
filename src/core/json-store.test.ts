@@ -8,6 +8,24 @@ function p(name: string): string {
   return path.join(paths.home(), name);
 }
 
+describe("writeFileAtomic parent directory creation", () => {
+  it("creates a missing parent directory", async () => {
+    // SessionStore.write relies on this entirely: nothing else mkdirs a
+    // session directory before meta.json lands in it. The parent lookup
+    // used to split on "/" by hand, which yields "." for a Windows path
+    // and left the real directory uncreated.
+    const nested = p(path.join("sessions", "sess_abc", "meta.json"));
+    await writeJsonAtomic(nested, { sessionId: "sess_abc" });
+    expect(await readJsonSafe(nested)).toEqual({ sessionId: "sess_abc" });
+  });
+
+  it("creates several missing levels at once", async () => {
+    const deep = p(path.join("a", "b", "c", "d.json"));
+    await writeJsonAtomic(deep, { ok: true });
+    expect(await readJsonSafe(deep)).toEqual({ ok: true });
+  });
+});
+
 describe("readJsonSafe", () => {
   it("returns undefined when the file is missing", async () => {
     expect(await readJsonSafe(p("missing.json"))).toBeUndefined();

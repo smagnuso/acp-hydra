@@ -1,10 +1,11 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ndjsonStreamFromStdio } from "../acp/framing.js";
 import { JsonRpcConnection } from "../acp/connection.js";
 import { paths } from "./paths.js";
 import { scrubInheritedEnv } from "./scrub-env.js";
+import { resolveSpawnTarget } from "./windows-command.js";
 import type { SpawnPlan } from "./registry.js";
 import type { AuthMethod } from "../acp/types-capabilities.js";
 
@@ -181,10 +182,17 @@ export class AgentInstance {
       ...opts.plan.env,
       ...(opts.extraEnv ?? {}),
     };
-    const child = spawn(opts.plan.command, opts.plan.args, {
+    // On Windows the plan's command is routinely an npm bin shim with no
+    // extension (`node_modules/.bin/<agent>`), which is a POSIX sh script
+    // there; the launchable sibling is `<agent>.cmd`, and a .cmd needs a
+    // shell. Identity on every other platform.
+    const target = resolveSpawnTarget(opts.plan.command, opts.plan.args);
+    const child = spawn(target.command, target.args, {
       cwd: opts.cwd,
       env,
       stdio: ["pipe", "pipe", "pipe"],
+      shell: target.shell,
+      windowsHide: true,
       // setsid the agent into its own session/process group. The daemon
       // already runs in its own setsid'd session, but macOS terminals
       // (iTerm2, Terminal.app) sometimes still reach inherited child
@@ -270,6 +278,28 @@ export class AgentInstance {
   private signalProcessGroup(signal: NodeJS.Signals): void {
     const pid = this.child.pid;
     if (pid === undefined) {
+      return;
+    }
+    // Windows has no process groups, so a negative pid means nothing and
+    // child.kill() is a bare TerminateProcess on the direct child only.
+    // That direct child is frequently a cmd.exe shim (see spawn above),
+    // which would leave the actual agent running and reparented. taskkill
+    // /T is the only tree-wide teardown available without a native
+    // Job Object binding; it is always a hard kill, so the SIGTERM ->
+    // SIGKILL escalation collapses into one step here.
+    if (process.platform === "win32") {
+      try {
+        spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], {
+          stdio: "ignore",
+          windowsHide: true,
+        });
+      } catch {
+        try {
+          this.child.kill();
+        } catch {
+          void 0;
+        }
+      }
       return;
     }
     try {

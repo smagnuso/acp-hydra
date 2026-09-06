@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
+import { resolveRollingLogPath } from "../../core/rolling-log.js";
 
 interface LogTailOptions {
   tail: number;
@@ -7,11 +8,15 @@ interface LogTailOptions {
 }
 
 export async function runLogTail(
-  logPath: string,
+  requestedPath: string,
   argv: string[],
   notFoundMessage: string,
 ): Promise<void> {
   const opts = parseLogTailFlags(argv);
+  // Where pino-roll could not create its `current.log` symlink (Windows
+  // without Developer Mode), fall back to the newest rotated file so the
+  // log is still tailable.
+  const logPath = await resolveRollingLogPath(requestedPath);
   let stat: fs.Stats;
   try {
     stat = await fsp.stat(logPath);

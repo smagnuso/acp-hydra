@@ -11,10 +11,24 @@ export function shortenHomePath(p: string): string {
   if (p === home) {
     return "~";
   }
-  if (p.startsWith(home + "/")) {
+  if (p.startsWith(home + path.sep)) {
     return "~" + p.slice(home.length);
   }
   return p;
+}
+
+// Compare two filesystem paths for identity, tolerating separator and
+// trailing-slash differences.
+//
+// Case is folded on Windows only. macOS is case-insensitive by default
+// but can be formatted case-sensitive, so folding there could report two
+// genuinely different directories as one; Windows has no such ambiguity.
+export function samePath(a: string, b: string): boolean {
+  const normalize = (p: string): string =>
+    process.platform === "win32"
+      ? path.resolve(p).toLowerCase()
+      : path.resolve(p);
+  return normalize(a) === normalize(b);
 }
 
 // Identify a test runner from process signals, or undefined for a real run.
@@ -87,6 +101,12 @@ export const paths = {
   peers: () => path.join(hydraHome(), "peers.json"),
   pidFile: () => path.join(hydraHome(), "daemon.pid"),
   logFile: () => path.join(hydraHome(), "daemon.log"),
+  // Startup failures only. spawnDaemonDetached wires the daemon's stderr
+  // to nothing, so a daemon that dies before it can open daemon.log (port
+  // already bound, unwritable log dir, bad config) would otherwise leave
+  // no trace at all and surface only as a readiness timeout. Written by
+  // daemon-entry's top-level catch, read back by waitForDaemonReady.
+  daemonBootLog: () => path.join(hydraHome(), "daemon-boot.log"),
   currentLogFile: () => path.join(hydraHome(), "current.log"),
   registryCache: () => path.join(hydraHome(), "registry.json"),
   // User-authored colour themes, one JSON file per theme. A file here shadows a

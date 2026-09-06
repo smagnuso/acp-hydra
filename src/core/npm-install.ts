@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { paths } from "./paths.js";
 import { currentPlatformKey } from "./binary-install.js";
+import { resolveSpawnTarget } from "./windows-command.js";
 
 // Where npm-install routes its human-readable progress lines. Mirrors
 // binary-install's sink so the daemon can swap in pino routing on
@@ -211,18 +212,23 @@ async function runNpmInstallOnce(
       const registryArgs = args.registry ? ["--registry", args.registry] : [];
       let child;
       try {
-        child = spawn(
-          "npm",
-          [
-            "install",
-            "--no-audit",
-            "--no-fund",
-            "--silent",
-            ...registryArgs,
-            args.packageSpec,
-          ],
-          { cwd: args.cwd, stdio: ["ignore", "pipe", "pipe"] },
-        );
+        // npm is `npm.cmd` on Windows, which spawn() will neither find by
+        // bare name nor launch without a shell. resolveSpawnTarget does
+        // both, and is identity everywhere else.
+        const target = resolveSpawnTarget("npm", [
+          "install",
+          "--no-audit",
+          "--no-fund",
+          "--silent",
+          ...registryArgs,
+          args.packageSpec,
+        ]);
+        child = spawn(target.command, target.args, {
+          cwd: args.cwd,
+          stdio: ["ignore", "pipe", "pipe"],
+          shell: target.shell,
+          windowsHide: true,
+        });
       } catch (err) {
         reject(err);
         return;

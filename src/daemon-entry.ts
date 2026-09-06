@@ -8,6 +8,7 @@
 // via runDaemonStart for dev ergonomics; this entry is only used for
 // the detached-spawn path that end users hit.
 import { loadGlobalConfig } from "./core/config.js";
+import { recordDaemonBootFailure } from "./core/daemon-boot-log.js";
 import { ensureServiceToken } from "./core/service-token.js";
 import { startDaemon } from "./daemon/server.js";
 
@@ -60,8 +61,13 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  process.stderr.write(
-    `hydra-acp-daemon: ${err instanceof Error ? err.message : String(err)}\n`,
-  );
-  process.exit(1);
+  const detail =
+    err instanceof Error ? (err.stack ?? err.message) : String(err);
+  process.stderr.write(`hydra-acp-daemon: ${detail}\n`);
+  // Under spawnDaemonDetached that stderr write goes nowhere, so persist
+  // the reason before exiting; waitForDaemonReady reads it back rather
+  // than reporting a bare readiness timeout.
+  void recordDaemonBootFailure(detail)
+    .catch(() => undefined)
+    .finally(() => process.exit(1));
 });

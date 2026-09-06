@@ -75,11 +75,21 @@ export async function writeDaemonPidFile(info: DaemonPidInfo): Promise<void> {
   });
 }
 
+// A signal-0 probe answers "does this pid exist", not "may I signal it".
+// EPERM means it exists and belongs to someone we cannot signal, which is
+// alive for every purpose this function serves. Only ESRCH is death.
+//
+// The distinction is load-bearing on Windows: libuv implements uv_kill via
+// OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_INFORMATION), so it asks
+// for terminate rights even for signal 0. A daemon running at a different
+// elevation than the caller answers ACCESS_DENIED, and treating that as
+// dead makes every caller spawn a redundant daemon that then fails to bind.
 export function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === "EPERM" || code === "EACCES";
   }
 }

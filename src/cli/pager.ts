@@ -68,6 +68,7 @@ export function openPager(opts: PagerOptions = {}): PagerHandle {
     shell: true,
     stdio: ["pipe", "inherit", "inherit"],
     env: childEnv,
+    windowsHide: true,
   });
   // The pager's stdin is our write target. If the user quits the pager
   // early, the kernel sends EPIPE on the next write — swallow it
@@ -156,6 +157,15 @@ function resolvePagerCommand(env: NodeJS.ProcessEnv): string | null {
   const generic = env.PAGER;
   if (generic !== undefined) {
     return generic.length === 0 ? null : generic;
+  }
+  // No `less` on a stock Windows install, and defaulting to it there is
+  // worse than not paging: with shell:true the missing pager is not a
+  // spawn error, so cmd.exe prints its own complaint, exits nonzero, and
+  // every byte we then write disappears into the broken pipe that the
+  // EPIPE handling above deliberately swallows. `more.com` is not a
+  // substitute (it mangles ANSI), so page only when asked to.
+  if (process.platform === "win32") {
+    return null;
   }
   return "less";
 }

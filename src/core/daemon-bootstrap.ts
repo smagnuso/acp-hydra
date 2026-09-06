@@ -6,8 +6,9 @@ import { invokedBinName } from "./bin-name.js";
 import type { HydraConfig } from "./config.js";
 import { computeConfigDigest } from "./config-digest.js";
 import { scrubInheritedEnv, setExtraScrubbedEnv } from "./scrub-env.js";
+import { readDaemonBootFailure } from "./daemon-boot-log.js";
 import { isProcessAlive, readDaemonPidFile } from "./daemon-pidfile.js";
-import { paths } from "./paths.js";
+import { paths, samePath } from "./paths.js";
 import type { RemoteTarget } from "./remote-target.js";
 
 // Read the daemon's pidfile to learn the plain-HTTP loopback URL it's
@@ -49,7 +50,7 @@ export async function probeDaemon(config: HydraConfig): Promise<DaemonProbe> {
   // store, which is the case the WS handshake would fail on. Reported
   // directly since this field exists rather than inferred from a hash of
   // unrelated settings.
-  if (health.home !== undefined && health.home !== paths.home()) {
+  if (health.home !== undefined && !samePath(health.home, paths.home())) {
     return "mismatch";
   }
   if (health.configDigest === undefined) {
@@ -212,6 +213,9 @@ export function spawnDaemonDetached(config?: HydraConfig): void {
   const child = spawn(process.execPath, [daemonBundle], {
     detached: true,
     stdio: "ignore",
+    // Without this a detached child gets its own console window on
+    // Windows, so every daemon start would flash up a stray shell.
+    windowsHide: true,
     env: scrubInheritedEnv(),
   });
   child.unref();
@@ -249,14 +253,24 @@ export async function waitForDaemonReady(
   config: HydraConfig,
   timeoutMs = 15_000,
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
   while (Date.now() < deadline) {
     if (await pingHealth(config)) {
       return;
     }
     await sleep(150);
   }
+  // A daemon that died on startup already said why; without this the
+  // caller gets a timeout that reads identically for a port collision, a
+  // bad config, and an unwritable home.
+  const failure = await readDaemonBootFailure(startedAt);
   throw new Error(
-    `hydra-acp daemon did not become ready within ${timeoutMs}ms`,
+    `hydra-acp daemon did not become ready within ${timeoutMs}ms` +
+      (failure
+        ? `\nthe daemon exited during startup:\n${failure}`
+        : `\nno startup error was recorded in ${paths.daemonBootLog()}; ` +
+          `the daemon may be running under a different HYDRA_ACP_HOME ` +
+          `(this one is ${paths.home()})`),
   );
 }

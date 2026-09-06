@@ -55,7 +55,11 @@ export async function writeFileAtomic(
   // path to write — preserving the link — even when the target file itself
   // doesn't exist yet (a freshly-decrypted dotfile).
   const target = await resolveWriteTarget(filePath);
-  const dir = dirname(target);
+  // path.dirname, not a hand-rolled split on "/": a Windows path has no
+  // forward slashes, so splitting on one yields "." and the real parent
+  // (a session directory that may not exist yet) never gets created,
+  // leaving the write to fail with ENOENT on the temp file.
+  const dir = path.dirname(target);
   await fs.mkdir(dir, { recursive: true });
   const tmp = `${target}.tmp-${process.pid}-${randSuffix()}`;
   try {
@@ -142,14 +146,6 @@ export async function readJsonSafe<T = unknown>(
   } catch {
     return undefined;
   }
-}
-
-function dirname(p: string): string {
-  const slash = p.lastIndexOf("/");
-  if (slash <= 0) {
-    return ".";
-  }
-  return p.slice(0, slash);
 }
 
 function randSuffix(): string {
