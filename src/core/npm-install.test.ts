@@ -27,6 +27,20 @@ describe("ensureNpmPackage", () => {
     pathSandbox = undefined;
   });
 
+  // A PATH containing the fake npm and nothing else that could resolve a
+  // real one. On Windows it must still contain System32: spawning a .cmd
+  // goes through a shell, and Node falls back to a bare "cmd.exe" that
+  // PATH has to resolve. Replacing PATH outright made every fake-npm
+  // test fail with ENOENT for cmd.exe rather than for npm, which read as
+  // "npm not found" and hid the fact that npm.CMD had resolved fine.
+  function sandboxedPath(): string {
+    if (process.platform !== "win32") {
+      return pathSandbox!;
+    }
+    const systemRoot = process.env.SystemRoot ?? "C:\\Windows";
+    return [pathSandbox!, path.join(systemRoot, "System32")].join(path.delimiter);
+  }
+
   it("short-circuits when the bin already exists on disk (cache hit)", async () => {
     const platformKey = currentPlatformKey()!;
     const installDir = paths.agentNpmInstallDir(
@@ -53,7 +67,7 @@ describe("ensureNpmPackage", () => {
   });
 
   it("surfaces a clear error when npm is not on PATH", async () => {
-    process.env.PATH = pathSandbox!;
+    process.env.PATH = sandboxedPath();
     await expect(
       ensureNpmPackage({
         agentId: "missing-npm",
@@ -76,7 +90,7 @@ process.stderr.write("npm ERR! syscall mkdir\\n");
 process.exit(243);
 `,
     );
-    process.env.PATH = pathSandbox!;
+    process.env.PATH = sandboxedPath();
 
     await expect(
       ensureNpmPackage({
@@ -106,7 +120,7 @@ process.exit(243);
 mkdirSync("node_modules/.bin", { recursive: true });
 `,
     );
-    process.env.PATH = pathSandbox!;
+    process.env.PATH = sandboxedPath();
 
     await expect(
       ensureNpmPackage({
@@ -139,7 +153,7 @@ mkdirSync("node_modules/.bin", { recursive: true });
 writeFileSync("node_modules/.bin/progress-bin", "", { mode: 0o755 });
 `,
     );
-    process.env.PATH = pathSandbox!;
+    process.env.PATH = sandboxedPath();
     const events: NpmInstallProgress[] = [];
     await ensureNpmPackage({
       agentId: "progress-pkg",
@@ -200,7 +214,7 @@ writeFileSync("node_modules/@qwen-code/qwen-code/package.json", '{"bin":{"qwen":
 writeFileSync("node_modules/.bin/qwen", "", { mode: 0o755 });
 `,
     );
-    process.env.PATH = pathSandbox!;
+    process.env.PATH = sandboxedPath();
 
     const result = await ensureNpmPackage({
       agentId: "qwen-code",
@@ -224,7 +238,7 @@ writeFileSync("node_modules/string-bin-pkg/package.json", '{"bin":"./cli.js"}');
 writeFileSync("node_modules/.bin/string-bin-pkg", "", { mode: 0o755 });
 `,
     );
-    process.env.PATH = pathSandbox!;
+    process.env.PATH = sandboxedPath();
 
     const result = await ensureNpmPackage({
       agentId: "string-bin-pkg",
@@ -247,7 +261,7 @@ writeFileSync("node_modules/.bin/multi-tool", "", { mode: 0o755 });
 writeFileSync("node_modules/.bin/multi-tool-legacy", "", { mode: 0o755 });
 `,
     );
-    process.env.PATH = pathSandbox!;
+    process.env.PATH = sandboxedPath();
 
     // hint is wrong but basename "multi-tool" matches a key in the object
     const result = await ensureNpmPackage({
@@ -271,7 +285,7 @@ writeFileSync("node_modules/.bin/foo", "", { mode: 0o755 });
 writeFileSync("node_modules/.bin/bar", "", { mode: 0o755 });
 `,
     );
-    process.env.PATH = pathSandbox!;
+    process.env.PATH = sandboxedPath();
 
     // hint "ghost" and basename "ambiguous-pkg" don't match "foo" or "bar"
     await expect(
@@ -326,7 +340,7 @@ mkdirSync("node_modules/.bin", { recursive: true });
 writeFileSync("node_modules/.bin/boom-bin", "", { mode: 0o755 });
 `,
     );
-    process.env.PATH = pathSandbox!;
+    process.env.PATH = sandboxedPath();
     const binPath = await ensureNpmPackage({
       agentId: "throwing-pkg",
       version: "1.0.0",
