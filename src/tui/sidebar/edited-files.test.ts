@@ -7,6 +7,16 @@ import {
 import type { SidebarEditedFile } from "./types.js";
 import type { ToolLineState } from "../format.js";
 import type { EditDiff } from "../../core/render-update.js";
+import * as path from "node:path";
+
+// "/repo" is not an absolute path on Windows, where path.join/resolve
+// against it yields D:\repo\... The code under test is right: it joins
+// git's forward-slash output onto a real repo root, and a native
+// separator is what you need in order to open the file afterwards. So
+// build the fixtures the way the platform spells them.
+const REPO = path.resolve(path.sep, "repo");
+const at = (...segments: string[]): string => path.join(REPO, ...segments);
+
 
 const state = (patch: Partial<ToolLineState> = {}): ToolLineState => ({
   initialTitle: "tool",
@@ -25,7 +35,7 @@ const diff = (path: string, oldText: string, newText: string): EditDiff => ({
 // collapse by path at render time.
 const collect = (
   entries: Array<[string, ToolLineState, EditDiff?]>,
-  cwd: string | null = "/repo",
+  cwd: string | null = REPO,
 ): SidebarEditedFile[] => {
   const byTool = new Map<string, SidebarEditedFile>();
   for (const [id, state, diff] of entries) {
@@ -77,7 +87,7 @@ describe("editedFileFromTool + collapseEditedFiles", () => {
       collect([
         [
           "t1",
-          state({ rawKind: "execute", locations: [{ path: "/repo/cli" }] }),
+          state({ rawKind: "execute", locations: [{ path: at("cli") }] }),
         ],
       ]),
     ).toEqual([]);
@@ -88,7 +98,7 @@ describe("editedFileFromTool + collapseEditedFiles", () => {
       collect([
         ["t1", state({ rawKind: "edit", locations: [{ path: "src/a.ts" }] })],
       ]),
-    ).toEqual([{ path: "/repo/src/a.ts", added: undefined, removed: undefined }]);
+    ).toEqual([{ path: at("src", "a.ts"), added: undefined, removed: undefined }]);
   });
 
   it("prefers the diff path over locations", () => {
@@ -99,7 +109,7 @@ describe("editedFileFromTool + collapseEditedFiles", () => {
         diff("src/right.ts", "a\n", "b\n"),
       ],
     ]);
-    expect(files[0]!.path).toBe("/repo/src/right.ts");
+    expect(files[0]!.path).toBe(at("src", "right.ts"));
   });
 
   it("counts added and removed lines from the diff", () => {
@@ -153,7 +163,7 @@ describe("editedFileFromTool + collapseEditedFiles", () => {
       ["t2", state({ rawKind: "edit", locations: [{ path: "a.ts" }] })],
       ["t3", state({ rawKind: "edit", locations: [{ path: "b.ts" }] })],
     ]);
-    expect(files.map((f) => f.path)).toEqual(["/repo/a.ts", "/repo/b.ts"]);
+    expect(files.map((f) => f.path)).toEqual([at("a.ts"), at("b.ts")]);
   });
 
   it("leaves paths untouched when there is no cwd", () => {
@@ -186,17 +196,17 @@ describe("session-scoped accumulation", () => {
     // Turn 1.
     byTool.set(
       "t1",
-      editedFileFromTool(state({ rawKind: "edit" }), diff("a.ts", "x\n", "y\n"), "/repo")!,
+      editedFileFromTool(state({ rawKind: "edit" }), diff("a.ts", "x\n", "y\n"), REPO)!,
     );
     // ... turn boundary wipes toolStates here; the map survives ...
     // Turn 2.
     byTool.set(
       "t2",
-      editedFileFromTool(state({ rawKind: "edit" }), diff("b.ts", "x\n", "y\n"), "/repo")!,
+      editedFileFromTool(state({ rawKind: "edit" }), diff("b.ts", "x\n", "y\n"), REPO)!,
     );
     expect(collapseEditedFiles(byTool.values()).map((f) => f.path)).toEqual([
-      "/repo/a.ts",
-      "/repo/b.ts",
+      at("a.ts"),
+      at("b.ts"),
     ]);
   });
 
@@ -206,10 +216,10 @@ describe("session-scoped accumulation", () => {
     const byTool = new Map<string, SidebarEditedFile>();
     const s = state({ rawKind: "edit", locations: [{ path: "a.ts" }] });
     // First fold: completed, no diff yet — counts unknown.
-    byTool.set("t1", editedFileFromTool(s, undefined, "/repo")!);
+    byTool.set("t1", editedFileFromTool(s, undefined, REPO)!);
     expect(collapseEditedFiles(byTool.values())[0]!.added).toBeUndefined();
     // Second fold: the diff arrived.
-    byTool.set("t1", editedFileFromTool(s, diff("a.ts", "x\n", "y\nz\n"), "/repo")!);
+    byTool.set("t1", editedFileFromTool(s, diff("a.ts", "x\n", "y\nz\n"), REPO)!);
     const files = collapseEditedFiles(byTool.values());
     expect(files).toHaveLength(1);
     expect(files[0]!.added).toBe(2);
@@ -219,18 +229,18 @@ describe("session-scoped accumulation", () => {
   it("sums distinct calls to the same file but not repeats of one call", () => {
     const byTool = new Map<string, SidebarEditedFile>();
     const d = diff("a.ts", "x\n", "y\n");
-    byTool.set("t1", editedFileFromTool(state({ rawKind: "edit" }), d, "/repo")!);
-    byTool.set("t1", editedFileFromTool(state({ rawKind: "edit" }), d, "/repo")!);
-    byTool.set("t2", editedFileFromTool(state({ rawKind: "edit" }), d, "/repo")!);
+    byTool.set("t1", editedFileFromTool(state({ rawKind: "edit" }), d, REPO)!);
+    byTool.set("t1", editedFileFromTool(state({ rawKind: "edit" }), d, REPO)!);
+    byTool.set("t2", editedFileFromTool(state({ rawKind: "edit" }), d, REPO)!);
     const files = collapseEditedFiles(byTool.values());
     expect(files).toHaveLength(1);
     expect(files[0]!.added).toBe(2);
   });
 
   it("collapse does not mutate the entries handed to it", () => {
-    const entry: SidebarEditedFile = { path: "/repo/a.ts", added: 1, removed: 1 };
-    collapseEditedFiles([entry, { path: "/repo/a.ts", added: 2, removed: 2 }]);
-    expect(entry).toEqual({ path: "/repo/a.ts", added: 1, removed: 1 });
+    const entry: SidebarEditedFile = { path: at("a.ts"), added: 1, removed: 1 };
+    collapseEditedFiles([entry, { path: at("a.ts"), added: 2, removed: 2 }]);
+    expect(entry).toEqual({ path: at("a.ts"), added: 1, removed: 1 });
   });
 });
 
@@ -272,7 +282,7 @@ describe("paths that arrive on a later update", () => {
       status: "pending",
     };
     const fold = (): void => {
-      const entry = editedFileFromTool(st, undefined, "/repo");
+      const entry = editedFileFromTool(st, undefined, REPO);
       if (entry === null) {
         byTool.delete("t1");
       } else {
@@ -290,7 +300,7 @@ describe("paths that arrive on a later update", () => {
     // tool_call_update: completed, and carries NO locations of its own.
     merge(st, { status: "completed" });
     fold();
-    expect([...byTool.values()].map((f) => f.path)).toEqual(["/repo/src/a.ts"]);
+    expect([...byTool.values()].map((f) => f.path)).toEqual([at("src", "a.ts")]);
   });
 
   it("records a call whose first event is already completed", () => {
@@ -302,8 +312,8 @@ describe("paths that arrive on a later update", () => {
         locations: [{ path: "src/a.ts" }],
       },
     );
-    expect(editedFileFromTool(st, undefined, "/repo")).toEqual({
-      path: "/repo/src/a.ts",
+    expect(editedFileFromTool(st, undefined, REPO)).toEqual({
+      path: at("src", "a.ts"),
       added: undefined,
       removed: undefined,
     });
@@ -318,6 +328,6 @@ describe("paths that arrive on a later update", () => {
     merge(st, { rawKind: "edit", locations: [{ path: "src/a.ts" }] });
     // A later update with locations: [] must not clear it.
     merge(st, { status: "completed", locations: [] });
-    expect(editedFileFromTool(st, undefined, "/repo")!.path).toBe("/repo/src/a.ts");
+    expect(editedFileFromTool(st, undefined, REPO)!.path).toBe(at("src", "a.ts"));
   });
 });

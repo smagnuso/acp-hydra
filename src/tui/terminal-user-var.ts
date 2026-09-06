@@ -258,7 +258,11 @@ export function listLiveHydraTtys(): LiveTtyEntry[] {
 // but a spec using a real temp dir would silently repoint the developer's
 // own pane — and a host may persist that cwd.
 export function publishReportedCwd(cwd: string): void {
-  if (!cwd.startsWith("/") || !process.stdout.isTTY) {
+  // path.isAbsolute, not a leading "/": the guard means "absolute", and
+  // spelling it the POSIX way silently disabled OSC 7 cwd reporting
+  // entirely on Windows, where every absolute path starts with a drive
+  // letter.
+  if (!path.isAbsolute(cwd) || !process.stdout.isTTY) {
     return;
   }
   process.stdout.write(`${OSC}7;${fileUriForCwd(cwd)}${ST}`);
