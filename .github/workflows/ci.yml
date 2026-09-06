@@ -32,7 +32,18 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
+      # The npm bundled with Node 20 and 22 (10.8.2 / 10.9.8) dies here
+      # with "Exit handler never called!" on this lockfile. On Node 22 it
+      # exits 1; on Node 20 it exits 0 having installed nothing, so the
+      # step passes and the next one silently runs against an empty
+      # node_modules. npm 11 installs it in seconds.
+      - run: npm install -g npm@11
       - run: npm ci
-      - run: npx tsc --noEmit
+      # `npm run typecheck`, never `npx tsc`: with node_modules missing
+      # or incomplete, npx does not fail, it downloads the unrelated
+      # `tsc` package off the registry and runs that instead. Going
+      # through the package script can only ever resolve the local
+      # TypeScript.
+      - run: npm run typecheck
       - run: npm test
       - run: npm run build
