@@ -85,6 +85,19 @@ function pathExists(p: string): Promise<boolean> {
     .catch(() => false);
 }
 
+// A path as git reported it, respelled the way the platform does.
+//
+// git prints forward slashes everywhere, including on Windows, where
+// `rev-parse --show-toplevel` answers C:/Users/x/repo. That string is
+// not wrong, but it is stored as a workspace's sourceCwd and later
+// compared against paths that came from process.cwd() or path.resolve —
+// which spell the same directory C:\Users\x\repo. The two never match,
+// so a workspace cannot be attributed back to the tree it came from.
+// path.normalize is a no-op on POSIX, where the separator already agrees.
+function nativePath(p: string): string {
+  return p.length === 0 ? p : path.normalize(p);
+}
+
 // Resolved form of a path, or the path itself when it cannot be resolved.
 // A workspace root that does not exist yet is the common miss, and it is
 // not an error: there are simply no workspaces under it.
@@ -383,7 +396,7 @@ export class GitProvider implements IsolationProvider {
     if (!topLevel.ok) {
       return { ok: false, reason: `${source} is not a git repository (or git is unavailable)` };
     }
-    const repoRoot = topLevel.stdout.trim();
+    const repoRoot = nativePath(topLevel.stdout.trim());
     if (repoRoot.length === 0) {
       return { ok: false, reason: `could not resolve the repository root for ${source}` };
     }
@@ -519,7 +532,7 @@ export class GitProvider implements IsolationProvider {
     if (!topLevel.ok) {
       return [];
     }
-    const repoRoot = topLevel.stdout.trim();
+    const repoRoot = nativePath(topLevel.stdout.trim());
     const listed = await runGit(["worktree", "list", "--porcelain"], repoRoot, QUERY_TIMEOUT_MS);
     if (!listed.ok) {
       return [];
@@ -535,7 +548,13 @@ export class GitProvider implements IsolationProvider {
     for (const entry of parseWorktreeListPorcelain(listed.stdout)) {
       // Only report workspaces we own. A user's own `git worktree add`
       // elsewhere is not ours to manage or reconcile away.
-      const parent = path.dirname(entry.path);
+      //
+      // Respelled natively first: git lists C:/Users/x/... while `root`
+      // was built with path.join and reads C:\Users\x\... so on Windows
+      // this comparison rejected every workspace and the provider
+      // reported owning none of them.
+      const entryPath = nativePath(entry.path);
+      const parent = path.dirname(entryPath);
       if (parent !== root && parent !== rootReal) {
         continue;
       }
@@ -543,7 +562,7 @@ export class GitProvider implements IsolationProvider {
       // identical to the one createWorkspace returned. Callers compare
       // these by string and persist them on session records; letting the
       // /private form leak in would make the same workspace look like two.
-      const wsPath = path.join(root, path.basename(entry.path));
+      const wsPath = path.join(root, path.basename(entryPath));
       const vcs: Record<string, string> = { kind: "git", repoRoot };
       const branch = shortBranchName(entry.branch);
       if (branch !== undefined) {
