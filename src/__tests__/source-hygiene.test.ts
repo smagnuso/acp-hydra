@@ -14,16 +14,24 @@
 // terminal-rendering fixtures under tui/, where they are the subject under
 // test rather than a typo.
 import { describe, it, expect } from "vitest";
-import { readFileSync, globSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
 
+// readdirSync's `recursive` rather than fs.globSync: globSync does not
+// exist before Node 22, and package.json still supports Node 20.
+function tsSources(): string[] {
+  return readdirSync(SRC, { recursive: true, encoding: "utf8" }).filter((f) =>
+    f.endsWith(".ts"),
+  );
+}
+
 describe("source hygiene", () => {
   it("has no raw NUL bytes in any TypeScript source", () => {
     const offenders: string[] = [];
-    for (const rel of globSync("**/*.ts", { cwd: SRC })) {
+    for (const rel of tsSources()) {
       const buf = readFileSync(join(SRC, rel));
       const at = buf.indexOf(0);
       if (at !== -1) {
