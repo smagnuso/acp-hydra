@@ -8,10 +8,23 @@ export function shortenHomePath(p: string): string {
   if (!home) {
     return p;
   }
-  if (p === home) {
+  // Separator- and case-insensitive on Windows. A path under the home
+  // directory routinely arrives there with BOTH separators in one string
+  // (`C:\Users\x/dev/proj`) because git reports forward slashes on
+  // Windows and agents pass those through verbatim. Matching only on
+  // path.sep silently stopped shortening those, so every such path
+  // rendered as a full absolute path instead of `~/...`.
+  //
+  // Normalizing preserves length, so the suffix is still sliced out of
+  // the original and keeps whatever separators the caller used.
+  const normalize = (s: string): string =>
+    process.platform === "win32" ? s.replace(/\\/g, "/").toLowerCase() : s;
+  const normalizedHome = normalize(home);
+  const normalizedPath = normalize(p);
+  if (normalizedPath === normalizedHome) {
     return "~";
   }
-  if (p.startsWith(home + path.sep)) {
+  if (normalizedPath.startsWith(normalizedHome + "/")) {
     return "~" + p.slice(home.length);
   }
   return p;

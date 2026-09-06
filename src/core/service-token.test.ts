@@ -9,6 +9,7 @@ import {
   writeServiceToken,
 } from "./service-token.js";
 import { paths } from "./paths.js";
+import { expectOwnerOnlyMode } from "../__tests__/test-utils.js";
 
 describe("generateServiceToken", () => {
   it("returns a hydra_token_-prefixed token with 32 hex bytes", () => {
@@ -67,7 +68,7 @@ describe("writeServiceToken", () => {
     const token = generateServiceToken();
     await writeServiceToken(token);
     const stat = await fs.stat(paths.authToken());
-    expect(stat.mode & 0o777).toBe(0o600);
+    expectOwnerOnlyMode(stat.mode);
     expect((await fs.readFile(paths.authToken(), "utf8")).trim()).toBe(token);
   });
 });

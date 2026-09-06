@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import * as fs from "node:fs/promises";
 import { RemotesStore, hostKey } from "./remotes-store.js";
 import { paths } from "./paths.js";
+import { expectOwnerOnlyMode } from "../__tests__/test-utils.js";
 
 function future(deltaMs: number): string {
   return new Date(Date.now() + deltaMs).toISOString();
@@ -26,7 +27,7 @@ describe("RemotesStore", () => {
       label: "laptop",
     });
     const stat = await fs.stat(paths.remotes());
-    expect(stat.mode & 0o777).toBe(0o600);
+    expectOwnerOnlyMode(stat.mode);
     const text = await fs.readFile(paths.remotes(), "utf8");
     const parsed = JSON.parse(text);
     expect(parsed.version).toBe(1);

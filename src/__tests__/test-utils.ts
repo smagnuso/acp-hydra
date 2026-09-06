@@ -1,5 +1,5 @@
 import * as fs from "node:fs/promises";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { MessageStream } from "../acp/framing.js";
 import type { JsonRpcMessage } from "../acp/types.js";
 import type { AgentInstance } from "../core/agent-instance.js";
@@ -8,6 +8,20 @@ import type {
   NotificationHandler,
 } from "../acp/connection.js";
 import { JsonRpcConnection } from "../acp/connection.js";
+
+// Assert a file carries owner-only permissions.
+//
+// A no-op on Windows, which derives file access from ACLs. Node's chmod
+// there only toggles the read-only bit, so the mode always reads back
+// 0o666 and there is nothing meaningful to assert. The exposure is real
+// but cannot be closed by chmod; see the Windows note in README's
+// security section.
+export function expectOwnerOnlyMode(mode: number): void {
+  if (process.platform === "win32") {
+    return;
+  }
+  expect(mode & 0o777).toBe(0o600);
+}
 
 // Write an executable script to disk in a way that minimizes the
 // window for execve's ETXTBSY race on Linux. The kernel briefly

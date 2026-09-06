@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { readJsonSafe, writeFileAtomic, writeJsonAtomic } from "./json-store.js";
 import { paths } from "./paths.js";
+import { expectOwnerOnlyMode } from "../__tests__/test-utils.js";
 
 function p(name: string): string {
   return path.join(paths.home(), name);
@@ -87,7 +88,7 @@ describe("writeJsonAtomic", () => {
     const target = p("secret.json");
     await writeJsonAtomic(target, { token: "x" }, { mode: 0o600 });
     const stat = await fs.stat(target);
-    expect(stat.mode & 0o777).toBe(0o600);
+    expectOwnerOnlyMode(stat.mode);
   });
 
   it("creates the parent directory if missing", async () => {
@@ -133,7 +134,7 @@ describe("writeFileAtomic", () => {
     await writeFileAtomic(target, "hello\n", { mode: 0o600 });
     expect(await fs.readFile(target, "utf8")).toBe("hello\n");
     const stat = await fs.stat(target);
-    expect(stat.mode & 0o777).toBe(0o600);
+    expectOwnerOnlyMode(stat.mode);
   });
 
   it("writes through a symlink instead of replacing it", async () => {

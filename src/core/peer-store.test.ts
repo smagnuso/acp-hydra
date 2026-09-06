@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import * as fs from "node:fs/promises";
 import { PeerStore, PEER_NAME_PATTERN } from "./peer-store.js";
 import { paths } from "./paths.js";
+import { expectOwnerOnlyMode } from "../__tests__/test-utils.js";
 
 function future(deltaMs: number): string {
   return new Date(Date.now() + deltaMs).toISOString();
@@ -30,7 +31,7 @@ describe("PeerStore", () => {
       label: "foo-label",
     });
     const stat = await fs.stat(paths.peers());
-    expect(stat.mode & 0o777).toBe(0o600);
+    expectOwnerOnlyMode(stat.mode);
     const text = await fs.readFile(paths.peers(), "utf8");
     const parsed = JSON.parse(text);
     expect(parsed.version).toBe(1);
