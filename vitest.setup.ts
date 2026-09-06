@@ -17,7 +17,16 @@ setControlWriter(() => {});
 
 // Worker-wide root for per-test tmp dirs. Created once at module load
 // and torn down in afterAll so the OS doesn't have to garbage-collect us.
-const workerRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hydra-acp-vitest-"));
+// realpathSync, because os.tmpdir() reports an 8.3 short path on Windows
+// (C:\Users\RUNNER~1\...) while git and fs.realpath report the long form
+// (C:\Users\runneradmin\...). HYDRA_ACP_HOME lives under this root, so an
+// uncanonicalized root leaks the short form into every product-side path
+// while tests that realpath their own fixtures use the long one — and the
+// two spellings of the same directory compare unequal. Also settles the
+// macOS /var -> /private/var case for free.
+const workerRoot = fs.realpathSync(
+  fs.mkdtempSync(path.join(os.tmpdir(), "hydra-acp-vitest-")),
+);
 
 // Every `git init` in this suite otherwise copies from the developer's
 // init.templateDir, which makes the tests depend on a directory outside
