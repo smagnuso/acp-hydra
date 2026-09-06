@@ -19,7 +19,11 @@ export interface DirFilterable {
 export function resolveDirFilter(input: string): string {
   const trimmed = input.trim();
   const resolved = path.resolve(expandHome(trimmed.length === 0 ? "." : trimmed));
-  if (resolved.length > 1 && resolved.endsWith(path.sep)) {
+  // "not the root" was spelled `length > 1`, which is true of a POSIX
+  // root ("/") but not a Windows one ("D:\", three characters). That
+  // trimmed a drive root down to a bare "D:", which names the drive's
+  // current directory rather than its root.
+  if (resolved !== path.parse(resolved).root && resolved.endsWith(path.sep)) {
     return resolved.slice(0, -1);
   }
   return resolved;

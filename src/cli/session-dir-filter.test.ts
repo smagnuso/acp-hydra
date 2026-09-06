@@ -24,7 +24,9 @@ describe("resolveDirFilter", () => {
 
   it("strips a trailing separator but keeps root", () => {
     expect(resolveDirFilter("/tmp/foo/")).toBe(abs("tmp", "foo"));
-    expect(resolveDirFilter("/")).toBe(path.resolve(path.sep));
+    // Root keeps its separator: path.resolve(path.sep) is "/" on POSIX
+    // and "D:\\" on Windows, and neither should be trimmed to nothing.
+    expect(resolveDirFilter(path.sep)).toBe(path.resolve(path.sep));
   });
 
   it("treats empty input as the current directory", () => {

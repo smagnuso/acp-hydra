@@ -441,7 +441,13 @@ describe("planSpawn", () => {
     );
     const originalPath = process.env.PATH;
     const originalSkip = process.env.HYDRA_ACP_SKIP_NPM_PREFETCH;
-    process.env.PATH = sandbox;
+    // Keep System32 on Windows: spawning a .cmd goes through a shell and
+    // Node falls back to a bare "cmd.exe" that PATH has to resolve. It
+    // contains no npm, so the sandbox still proves what it means to.
+    process.env.PATH =
+      process.platform === "win32"
+        ? [sandbox, path.join(process.env.SystemRoot ?? "C:\\Windows", "System32")].join(path.delimiter)
+        : sandbox;
     delete process.env.HYDRA_ACP_SKIP_NPM_PREFETCH;
     try {
       const agent: RegistryAgent = {

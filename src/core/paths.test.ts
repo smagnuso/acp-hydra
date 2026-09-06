@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { hydraHome, detectTestRunner, samePath } from "./paths.js";
+import * as path from "node:path";
 
 describe("hydraHome test-runner guard", () => {
   afterEach(() => {
@@ -7,8 +8,11 @@ describe("hydraHome test-runner guard", () => {
   });
 
   it("honours an explicit HYDRA_ACP_HOME override", () => {
-    vi.stubEnv("HYDRA_ACP_HOME", "/tmp/explicit-home");
-    expect(hydraHome()).toBe("/tmp/explicit-home");
+    // Absolute is spelled differently per platform, and hydraHome()
+    // resolves what it is given.
+    const explicit = path.resolve(path.sep, "tmp", "explicit-home");
+    vi.stubEnv("HYDRA_ACP_HOME", explicit);
+    expect(hydraHome()).toBe(explicit);
   });
 
   it("throws (not real ~/.hydra-acp) when unset under vitest", () => {
