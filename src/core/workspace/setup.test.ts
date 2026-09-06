@@ -129,12 +129,24 @@ describe("runWorkspaceHook", () => {
   it("runs in the workspace and receives context as env", async () => {
     const src = await tmp("hydra-hook-src-");
     const ws = await tmp("hydra-hook-ws-");
-    const res = await runWorkspaceHook(
-      'printf "%s|%s" "$PWD" "$HYDRA_SOURCE_CWD" > marker.txt',
-      { workspacePath: ws, sourceCwd: src, label: "l" },
-    );
+    // A hook is a shell command string, so it is written in whichever
+    // shell the platform runs it under: exec() is `/bin/sh -c` on POSIX
+    // and `cmd.exe /d /s /c` on Windows, which spells variables %NAME%
+    // and has no printf. This is the documented tradeoff of accepting a
+    // command string rather than an argv.
+    const hook =
+      process.platform === "win32"
+        ? "echo %CD%^|%HYDRA_SOURCE_CWD%> marker.txt"
+        : 'printf "%s|%s" "$PWD" "$HYDRA_SOURCE_CWD" > marker.txt';
+    const res = await runWorkspaceHook(hook, {
+      workspacePath: ws,
+      sourceCwd: src,
+      label: "l",
+    });
     expect(res.ok).toBe(true);
-    expect(await fs.readFile(path.join(ws, "marker.txt"), "utf8")).toBe(`${ws}|${src}`);
+    expect((await fs.readFile(path.join(ws, "marker.txt"), "utf8")).trim()).toBe(
+      `${ws}|${src}`,
+    );
   });
 
   it("also receives context as JSON on stdin", async () => {

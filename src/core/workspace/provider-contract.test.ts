@@ -15,6 +15,7 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import { CopyProvider } from "./copy-provider.js";
 import { GitProvider } from "./git-provider.js";
+import { shortenHomePath } from "../paths.js";
 import {
   WorkspaceUnsupportedError,
   type IsolationProvider,
@@ -278,7 +279,7 @@ describe("git provider specifics", () => {
   it("says it is in sync with the source when neither side has moved", async () => {
     const { provider, source, ws } = await gitWorkspace("insync");
     const report = (await provider.statusReport(ws)).join("\n");
-    expect(report).toContain(`in sync with ${source}`);
+    expect(report).toContain(`in sync with ${shortenHomePath(source)}`);
   });
 
   it("counts the source's new commits and names the verb that brings them in", async () => {

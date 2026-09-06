@@ -14,6 +14,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { SessionManager } from "../core/session-manager.js";
 import { stripHydraSessionPrefix } from "../core/session.js";
+import { shortenHomePath } from "../core/paths.js";
 import {
   drainSnapshots,
   exec,
@@ -226,7 +227,7 @@ describe("session isolation end-to-end: joining a workspace", () => {
     const session = await manager.create({ agentId: "claude-code", cwd: plain });
     const status = await manager.runWorkspaceAction(session.sessionId, "status");
     expect(status).toContain("Not isolated");
-    expect(status).toContain(plain);
+    expect(status).toContain(shortenHomePath(plain));
   });
 
   it("names the work in the workspace, and the source's drift, before `stop` is tried", async () => {

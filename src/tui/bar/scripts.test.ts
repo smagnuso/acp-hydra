@@ -64,7 +64,11 @@ describe("createScriptRunner", () => {
       cwd: () => null,
       onOutput: (command, output) => outputs.set(command, output),
     });
-    const command = "echo '  hi  there  '";
+    // cmd.exe does not strip single quotes, so they would land in the
+    // output verbatim; the assertion is about whitespace collapsing, not
+    // about quoting.
+    const command =
+      process.platform === "win32" ? "echo   hi  there  " : "echo '  hi  there  '";
     runner.poll(new Map([[command, 1_000]]), 0);
     await vi.waitFor(() => {
       expect(outputs.get(command)).toBe("hi there");
