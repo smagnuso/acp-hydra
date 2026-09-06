@@ -2,17 +2,30 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    # The default branch is master. This said `main`, so no push build
+    # had ever run.
+    branches: [master]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
+    name: ${{ matrix.os }} / node ${{ matrix.node }}
     runs-on: ${{ matrix.os }}
+    # Windows is informational until it goes green: hydra has never been
+    # run there, and a red leg on a platform no maintainer can reproduce
+    # on should report rather than block. Drop the flag from the matrix
+    # entry below once it passes.
+    continue-on-error: ${{ matrix.experimental == true }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
         node: [20, 22]
+        include:
+          - os: windows-latest
+            node: 22
+            experimental: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
