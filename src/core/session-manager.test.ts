@@ -1186,15 +1186,17 @@ describe("SessionManager: history persistence", () => {
     await session.close({ deleteRecord: true });
 
     // Poll briefly because close handlers run fire-and-forget.
+    // 200ms was not enough on a Windows runner, where a deletion can wait
+    // on a handle the writer has not dropped yet.
     let exists = true;
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 60; i++) {
       try {
         await fs.access(historyPath);
       } catch {
         exists = false;
         break;
       }
-      await new Promise((r) => setTimeout(r, 10));
+      await new Promise((r) => setTimeout(r, 50));
     }
     expect(exists).toBe(false);
   });
@@ -2075,12 +2077,19 @@ describe("SessionManager: /hydra agent persistence", () => {
       session.sessionId,
       "meta.json",
     );
+    // Longer waits rather than more of them, and a tolerant read: each
+    // attempt opens meta.json while the writer is renaming onto it, which
+    // Windows minds far more than POSIX. A read landing inside that
+    // window is a retry, not a failure.
     let record: { agentId?: string; pendingAgentSwap?: string } | undefined;
-    for (let i = 0; i < 20; i++) {
-      const raw = await fs.readFile(recordPath, "utf8");
-      record = JSON.parse(raw);
+    for (let i = 0; i < 60; i++) {
+      try {
+        record = JSON.parse(await fs.readFile(recordPath, "utf8"));
+      } catch {
+        record = undefined;
+      }
       if (record?.pendingAgentSwap === "new") break;
-      await new Promise((r) => setTimeout(r, 10));
+      await new Promise((r) => setTimeout(r, 50));
     }
     expect(record?.pendingAgentSwap).toBe("new");
     expect(record?.agentId).toBe("old");
@@ -2126,7 +2135,7 @@ describe("SessionManager: /hydra agent persistence", () => {
     // The fast-path check is async (reads the record + history off disk);
     // wait for dispatchSynthesisSwap to be called rather than polling a
     // fixed sleep.
-    for (let i = 0; i < 50 && dispatchSpy.mock.calls.length === 0; i++) {
+    for (let i = 0; i < 200 && dispatchSpy.mock.calls.length === 0; i++) {
       await new Promise((r) => setTimeout(r, 10));
     }
 
@@ -2652,7 +2661,7 @@ describe("SessionManager: resurrect from import", () => {
     expect(session.upstreamSessionId).toBe("u_fresh");
 
     // Allow the fire-and-forget seedFromImport to land.
-    for (let i = 0; i < 30; i += 1) {
+    for (let i = 0; i < 120; i += 1) {
       if (requestMock.mock.calls.length >= 3) {
         break;
       }
