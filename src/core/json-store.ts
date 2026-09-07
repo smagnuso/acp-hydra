@@ -43,6 +43,61 @@ export interface WriteFileAtomicOptions {
 // Same atomicity guarantee as writeJsonAtomic but for callers that have
 // already serialized their payload (or are writing non-JSON text like
 // the password hash file).
+/**
+ * Windows replaces a file by unlinking the destination, which fails while
+ * anything else holds a handle to it: antivirus mid-scan, the search
+ * indexer, another hydra process reading the same record. The error is
+ * transient (EPERM / EACCES / EBUSY) and clears in milliseconds.
+ *
+ * This matters because the write is the last step of an atomic replace,
+ * and most callers here are fire-and-forget (`void mutateRecord(...)`,
+ * the snapshot handlers). A rejection at that point is swallowed, so
+ * without retrying, the visible symptom is not an error: it is state
+ * that silently did not persist. That is what a model selection reverting
+ * across a daemon restart looks like from the outside.
+ *
+ * POSIX rename has no such failure mode, so this is a no-op there and
+ * the platform check keeps it that way rather than masking a real EPERM.
+ *
+ * Injectable for tests, which is the only way to exercise a Windows-only
+ * failure from anywhere else.
+ */
+const TRANSIENT_RENAME_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
+const RENAME_ATTEMPTS = 10;
+
+export async function renameWithRetry(
+  from: string,
+  to: string,
+  deps: {
+    rename?: (a: string, b: string) => Promise<void>;
+    platform?: NodeJS.Platform;
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<void> {
+  const rename = deps.rename ?? fs.rename;
+  const platform = deps.platform ?? process.platform;
+  const sleep =
+    deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code ?? "";
+      const retryable =
+        platform === "win32" &&
+        TRANSIENT_RENAME_CODES.has(code) &&
+        attempt < RENAME_ATTEMPTS - 1;
+      if (!retryable) {
+        throw err;
+      }
+      // Linear backoff: 10ms, 20ms, ... 90ms — 450ms total, which is far
+      // past a scanner's window without stalling a turn if it is not.
+      await sleep(10 * (attempt + 1));
+    }
+  }
+}
+
 export async function writeFileAtomic(
   filePath: string,
   body: string,
@@ -70,7 +125,7 @@ export async function writeFileAtomic(
       writeOpts.mode = opts.mode;
     }
     await fs.writeFile(tmp, body, writeOpts);
-    await fs.rename(tmp, target);
+    await renameWithRetry(tmp, target);
   } catch (err) {
     await fs.unlink(tmp).catch(() => undefined);
     throw err;

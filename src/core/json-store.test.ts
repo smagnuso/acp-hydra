@@ -1,7 +1,12 @@
 import { describe, it, expect } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { readJsonSafe, writeFileAtomic, writeJsonAtomic } from "./json-store.js";
+import {
+  readJsonSafe,
+  renameWithRetry,
+  writeFileAtomic,
+  writeJsonAtomic,
+} from "./json-store.js";
 import { paths } from "./paths.js";
 import { expectOwnerOnlyMode } from "../__tests__/test-utils.js";
 
@@ -166,5 +171,66 @@ describe("writeFileAtomic", () => {
 
     expect((await fs.lstat(link)).isSymbolicLink()).toBe(true);
     expect(await fs.readFile(realTarget, "utf8")).toBe('{"v":2}\n');
+  });
+});
+
+describe("renameWithRetry", () => {
+  const err = (code: string): NodeJS.ErrnoException =>
+    Object.assign(new Error(code), { code });
+
+  const attempts = (
+    fail: number,
+    code = "EPERM",
+  ): { rename: (a: string, b: string) => Promise<void>; count: () => number } => {
+    let n = 0;
+    return {
+      count: () => n,
+      rename: async () => {
+        n += 1;
+        if (n <= fail) {
+          throw err(code);
+        }
+      },
+    };
+  };
+
+  const noSleep = async (): Promise<void> => undefined;
+
+  it("retries a transient Windows rename and succeeds", async () => {
+    // Antivirus or the indexer holding the destination open. Fire-and-
+    // forget callers swallow the rejection, so without the retry the
+    // symptom is silently unpersisted state, not an error.
+    const a = attempts(3);
+    await renameWithRetry("a", "b", {
+      rename: a.rename,
+      platform: "win32",
+      sleep: noSleep,
+    });
+    expect(a.count()).toBe(4);
+  });
+
+  it("gives up rather than spinning forever", async () => {
+    const a = attempts(Number.MAX_SAFE_INTEGER);
+    await expect(
+      renameWithRetry("a", "b", { rename: a.rename, platform: "win32", sleep: noSleep }),
+    ).rejects.toThrow("EPERM");
+    expect(a.count()).toBe(10);
+  });
+
+  it("does not retry a code that is not transient", async () => {
+    const a = attempts(Number.MAX_SAFE_INTEGER, "ENOENT");
+    await expect(
+      renameWithRetry("a", "b", { rename: a.rename, platform: "win32", sleep: noSleep }),
+    ).rejects.toThrow("ENOENT");
+    expect(a.count()).toBe(1);
+  });
+
+  it("does not retry off Windows, where rename has no such failure mode", async () => {
+    // Retrying here would mask a real EPERM instead of reporting it.
+    const a = attempts(1);
+    await expect(
+      renameWithRetry("a", "b", { rename: a.rename, platform: "linux", sleep: noSleep }),
+    ).rejects.toThrow("EPERM");
+    expect(a.count()).toBe(1);
   });
 });

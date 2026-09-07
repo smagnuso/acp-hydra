@@ -26,7 +26,12 @@ import {
 
 // See workspace-isolation-lifecycle.test.ts: real git, and these files
 // no longer get the machine to themselves.
-vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
+// 60s, not the 30s its siblings use: joining runs two workspaces through
+// a real merge, so it spawns roughly twice the git of any other file
+// here, and it is the only one still timing out on Windows (twice in the
+// last eight runs there, never on POSIX). Process creation is the cost,
+// and this file pays it most.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
 registerTempRootCleanup();
 
