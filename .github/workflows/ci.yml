@@ -50,3 +50,31 @@ jobs:
       # absent, which keeps a bare `npm test` working locally.
       - run: npm run build
       - run: npm test
+
+  # The single check branch protection requires. Do not rename it.
+  #
+  # The matrix jobs are named from their own matrix values
+  # (`ubuntu-latest / node 20`, ...), so requiring those names directly
+  # means the required list stops matching the moment the matrix changes,
+  # and the gate silently stops gating. That is the same failure this
+  # workflow already had once, when the push trigger named a branch that
+  # did not exist and no CI ran at all for the life of the repo. One
+  # stable name that the matrix feeds into cannot drift that way.
+  all-checks:
+    name: all-checks
+    runs-on: ubuntu-latest
+    needs: test
+    # always(), so this still runs when a matrix leg fails. Without it the
+    # job is skipped instead, and a skipped check does not reliably block
+    # a merge — it would report success by absence.
+    if: always()
+    steps:
+      # `needs.test.result` is the whole matrix collapsed to one value:
+      # success only if every leg succeeded, so this covers failure,
+      # cancellation and skips alike.
+      - name: Require every matrix leg to have passed
+        if: needs.test.result != 'success'
+        run: |
+          echo "matrix result: ${{ needs.test.result }}"
+          exit 1
+      - run: echo "all matrix legs passed"
