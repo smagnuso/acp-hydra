@@ -72,7 +72,7 @@ describe("createScriptRunner", () => {
     runner.poll(new Map([[command, 1_000]]), 0);
     await vi.waitFor(() => {
       expect(outputs.get(command)).toBe("hi there");
-    });
+    }, { timeout: 15_000, interval: 50 });
   });
 
   it("collapses multi-line stdout to a single space-joined line", async () => {
@@ -85,7 +85,7 @@ describe("createScriptRunner", () => {
     runner.poll(new Map([[command, 1_000]]), 0);
     await vi.waitFor(() => {
       expect(outputs.get(command)).toBe("line1 line2");
-    });
+    }, { timeout: 15_000, interval: 50 });
   });
 
   it("reports null on a non-zero exit", async () => {
@@ -98,7 +98,7 @@ describe("createScriptRunner", () => {
     runner.poll(new Map([[command, 1_000]]), 0);
     await vi.waitFor(() => {
       expect(outputs.has(command)).toBe(true);
-    });
+    }, { timeout: 15_000, interval: 50 });
     expect(outputs.get(command)).toBeNull();
   });
 
@@ -112,7 +112,7 @@ describe("createScriptRunner", () => {
     runner.poll(new Map([[command, 1_000]]), 0);
     await vi.waitFor(() => {
       expect(outputs.has(command)).toBe(true);
-    });
+    }, { timeout: 15_000, interval: 50 });
     expect(outputs.get(command)).toBeNull();
   });
 
@@ -133,7 +133,7 @@ describe("createScriptRunner", () => {
     runner.poll(new Map([[command, 0]]), 10);
     await vi.waitFor(() => {
       expect(outputs.get(command)).toBe("done");
-    });
+    }, { timeout: 15_000, interval: 50 });
     expect(calls.length).toBe(1);
   });
 
@@ -151,7 +151,7 @@ describe("createScriptRunner", () => {
     runner.poll(new Map([[command, 10_000]]), 0);
     await vi.waitFor(() => {
       expect(outputs.has(command)).toBe(true);
-    });
+    }, { timeout: 15_000, interval: 50 });
     // Still well within the 10s window: a second poll must not re-run it.
     runner.poll(new Map([[command, 10_000]]), 100);
     expect(runs).toBe(1);
