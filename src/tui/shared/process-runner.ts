@@ -7,8 +7,31 @@
 
 import { exec } from "node:child_process";
 
+const defaultExec: ExecFn = (command, options, callback) => {
+  exec(command, options, (err, stdout) => callback(err, stdout));
+};
+
 const EXEC_TIMEOUT_MS = 3_000;
 const EXEC_MAX_BUFFER = 64 * 1024;
+
+/**
+ * The one call this primitive makes into the outside world, named so a
+ * test can supply its own.
+ *
+ * Everything else here is already deterministic: `poll` takes `now` as an
+ * argument rather than reading the clock. Spawning was the last real
+ * dependency, and leaving it hardcoded meant every test of the dedup and
+ * refresh-interval policy had to start a shell and then wait on it. Those
+ * waits are unbounded (process creation on a loaded Windows runner costs
+ * multiples of what it does on POSIX), which is not a slow test so much as
+ * a test that fails at random: it is what turned master red on the merge
+ * of #10.
+ */
+export type ExecFn = (
+  command: string,
+  options: { cwd?: string; timeout: number; maxBuffer: number; env?: NodeJS.ProcessEnv },
+  callback: (err: Error | null, stdout: string) => void,
+) => void;
 
 export interface ProcessRunner {
   /**
@@ -27,14 +50,17 @@ export function createProcessRunner(opts: {
   envFor?: (command: string) => Record<string, string> | undefined;
   sanitize: (stdout: string) => string | null;
   onOutput: (command: string, output: string | null) => void;
+  /** Defaults to child_process.exec. Tests pass a synchronous stand-in. */
+  exec?: ExecFn;
 }): ProcessRunner {
+  const execFn: ExecFn = opts.exec ?? defaultExec;
   const inFlight = new Set<string>();
   const lastRun = new Map<string, number>();
 
   const run = (command: string): void => {
     inFlight.add(command);
     const extraEnv = opts.envFor?.(command);
-    exec(
+    execFn(
       command,
       {
         cwd: opts.cwd() ?? undefined,

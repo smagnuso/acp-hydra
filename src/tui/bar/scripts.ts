@@ -8,6 +8,7 @@ import type { BarSideConfig } from "../../core/config.js";
 import type { BarLayoutConfig } from "./types.js";
 import {
   createProcessRunner,
+  type ExecFn,
   type ProcessRunner,
 } from "../shared/process-runner.js";
 
@@ -70,11 +71,14 @@ export function createScriptRunner(opts: {
   // shared/script-tokens.ts for how these get minted.
   envFor?: (command: string) => Record<string, string> | undefined;
   onOutput: (command: string, output: string | null) => void;
+  /** Defaults to child_process.exec; see ProcessRunner's ExecFn. */
+  exec?: ExecFn;
 }): ScriptRunner {
   return createProcessRunner({
     cwd: opts.cwd,
     envFor: opts.envFor,
     sanitize,
     onOutput: opts.onOutput,
+    exec: opts.exec,
   });
 }
