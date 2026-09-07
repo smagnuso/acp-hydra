@@ -25,6 +25,9 @@ export interface PagerOptions {
   // Test-only override of the spawn target so unit tests can inject a
   // recorder without forking less / cat.
   spawn?: typeof spawn;
+  // Test-only override of process.platform. The default pager differs on
+  // Windows, and both branches should be checkable from either host.
+  platform?: NodeJS.Platform;
 }
 
 export interface PagerHandle {
@@ -50,7 +53,7 @@ export function openPager(opts: PagerOptions = {}): PagerHandle {
     };
   }
   const env = opts.env ?? process.env;
-  const command = resolvePagerCommand(env);
+  const command = resolvePagerCommand(env, opts.platform ?? process.platform);
   if (command === null) {
     return {
       stream: process.stdout,
@@ -68,6 +71,7 @@ export function openPager(opts: PagerOptions = {}): PagerHandle {
     shell: true,
     stdio: ["pipe", "inherit", "inherit"],
     env: childEnv,
+    windowsHide: true,
   });
   // The pager's stdin is our write target. If the user quits the pager
   // early, the kernel sends EPIPE on the next write — swallow it
@@ -148,7 +152,10 @@ export function openPager(opts: PagerOptions = {}): PagerHandle {
 // Resolve the pager command. `null` means "no pager configured" — the
 // caller falls back to direct stdout. An empty string from the env
 // counts as "no pager" (matches git's `PAGER=` behavior).
-function resolvePagerCommand(env: NodeJS.ProcessEnv): string | null {
+function resolvePagerCommand(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): string | null {
   const hydra = env.HYDRA_ACP_PAGER;
   if (hydra !== undefined) {
     return hydra.length === 0 ? null : hydra;
@@ -156,6 +163,15 @@ function resolvePagerCommand(env: NodeJS.ProcessEnv): string | null {
   const generic = env.PAGER;
   if (generic !== undefined) {
     return generic.length === 0 ? null : generic;
+  }
+  // No `less` on a stock Windows install, and defaulting to it there is
+  // worse than not paging: with shell:true the missing pager is not a
+  // spawn error, so cmd.exe prints its own complaint, exits nonzero, and
+  // every byte we then write disappears into the broken pipe that the
+  // EPIPE handling above deliberately swallows. `more.com` is not a
+  // substitute (it mangles ANSI), so page only when asked to.
+  if (platform === "win32") {
+    return null;
   }
   return "less";
 }

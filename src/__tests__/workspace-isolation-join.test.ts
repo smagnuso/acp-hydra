@@ -14,6 +14,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { SessionManager } from "../core/session-manager.js";
 import { stripHydraSessionPrefix } from "../core/session.js";
+import { shortenHomePath } from "../core/paths.js";
 import {
   drainSnapshots,
   exec,
@@ -25,7 +26,12 @@ import {
 
 // See workspace-isolation-lifecycle.test.ts: real git, and these files
 // no longer get the machine to themselves.
-vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
+// 60s, not the 30s its siblings use: joining runs two workspaces through
+// a real merge, so it spawns roughly twice the git of any other file
+// here, and it is the only one still timing out on Windows (twice in the
+// last eight runs there, never on POSIX). Process creation is the cost,
+// and this file pays it most.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
 registerTempRootCleanup();
 
@@ -226,7 +232,7 @@ describe("session isolation end-to-end: joining a workspace", () => {
     const session = await manager.create({ agentId: "claude-code", cwd: plain });
     const status = await manager.runWorkspaceAction(session.sessionId, "status");
     expect(status).toContain("Not isolated");
-    expect(status).toContain(plain);
+    expect(status).toContain(shortenHomePath(plain));
   });
 
   it("names the work in the workspace, and the source's drift, before `stop` is tried", async () => {

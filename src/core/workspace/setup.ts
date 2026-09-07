@@ -23,7 +23,7 @@
 // project. Committing `.hydra/worktree.json` means every client and
 // every contributor gets the same setup.
 
-import { execFile } from "node:child_process";
+import { exec } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { readJsonSafe } from "../json-store.js";
@@ -154,7 +154,13 @@ export async function applyCarry(
     }
     try {
       await fs.mkdir(path.dirname(to), { recursive: true });
-      await fs.cp(from, to, { recursive: stat.isDirectory() });
+      // dereference: carry the CONTENT, never the link. fs.cp given a
+      // symlink copies the link itself, so a carried `.env` that is a
+      // symlink (dotfile managers, direnv, monorepo layouts: common)
+      // would arrive in the workspace still pointing at the source, and
+      // the first write to it inside the workspace would edit the user's
+      // real file. That is precisely the isolation this provides.
+      await fs.cp(from, to, { recursive: stat.isDirectory(), dereference: true });
       copied.push(entry);
     } catch {
       skipped.push(entry);
@@ -196,13 +202,23 @@ export async function runWorkspaceHook(
   const timeout = (ctx.timeoutSeconds ?? DEFAULT_HOOK_TIMEOUT_S) * 1_000;
 
   return new Promise<HookResult>((resolve) => {
-    const child = execFile(
-      "/bin/sh",
-      ["-c", command],
+    // exec() is `/bin/sh -c` on POSIX and `%ComSpec% /d /s /c` on
+    // Windows, so this stays byte-identical off Windows while no longer
+    // failing there with a bare ENOENT on a path that does not exist.
+    //
+    // Hooks are a command STRING, committed in the repo, and are
+    // documented as such — they carry `&&`, redirects and $VAR
+    // expansion, so they cannot simply be spawned as argv. That means
+    // a POSIX-shaped hook still will not run under cmd.exe; it now
+    // fails with cmd.exe's own diagnostic instead of silently claiming
+    // the hook itself failed. Same bargain npm's `scripts` field makes.
+    const child = exec(
+      command,
       {
         cwd: ctx.workspacePath,
         timeout,
         maxBuffer: 8 * 1024 * 1024,
+        windowsHide: true,
         env: {
           ...process.env,
           HYDRA_WORKSPACE_PATH: ctx.workspacePath,

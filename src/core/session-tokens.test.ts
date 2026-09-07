@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { SessionTokenStore } from "./session-tokens.js";
 import { paths } from "./paths.js";
+import { expectOwnerOnlyMode } from "../__tests__/test-utils.js";
 
 function tokensFilePath(): string {
   return path.join(paths.home(), "session-tokens.json");
@@ -117,7 +118,7 @@ describe("SessionTokenStore", () => {
     await store.issue();
     await store.flush();
     const stat = await fs.stat(tokensFilePath());
-    expect(stat.mode & 0o777).toBe(0o600);
+    expectOwnerOnlyMode(stat.mode);
   });
 
   it("verify() bumps lastUsedAt", async () => {

@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { hydraHome, detectTestRunner } from "./paths.js";
+import { hydraHome, detectTestRunner, samePath } from "./paths.js";
+import * as path from "node:path";
 
 describe("hydraHome test-runner guard", () => {
   afterEach(() => {
@@ -7,8 +8,11 @@ describe("hydraHome test-runner guard", () => {
   });
 
   it("honours an explicit HYDRA_ACP_HOME override", () => {
-    vi.stubEnv("HYDRA_ACP_HOME", "/tmp/explicit-home");
-    expect(hydraHome()).toBe("/tmp/explicit-home");
+    // Absolute is spelled differently per platform, and hydraHome()
+    // resolves what it is given.
+    const explicit = path.resolve(path.sep, "tmp", "explicit-home");
+    vi.stubEnv("HYDRA_ACP_HOME", explicit);
+    expect(hydraHome()).toBe(explicit);
   });
 
   it("throws (not real ~/.hydra-acp) when unset under vitest", () => {
@@ -30,6 +34,21 @@ describe("hydraHome test-runner guard", () => {
         delete (process.versions as { bun?: string }).bun;
       }
     }
+  });
+
+  it("compares paths ignoring separators and trailing slashes", () => {
+    expect(samePath("/tmp/a/b", "/tmp/a/b/")).toBe(true);
+    expect(samePath("/tmp/a/b", "/tmp/a/./b")).toBe(true);
+    expect(samePath("/tmp/a/b", "/tmp/a/c")).toBe(false);
+  });
+
+  it("folds case only on Windows", () => {
+    // probeDaemon compares the daemon's reported home against ours, so a
+    // Zed-launched shim seeing `D:\Hydra` where the daemon recorded
+    // `D:\hydra` must not read as a config mismatch. macOS is excluded
+    // deliberately: it can be formatted case-sensitive.
+    const folded = process.platform === "win32";
+    expect(samePath("/tmp/Hydra", "/tmp/hydra")).toBe(folded);
   });
 
   it("detects jest and node:test runners", () => {

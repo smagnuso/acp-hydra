@@ -15,6 +15,12 @@ import {
 } from "./running-tools.js";
 import { emptySnapshot } from "./types.js";
 import type { SidebarContext, SidebarRunningTool, SidebarSnapshot } from "./types.js";
+import * as path from "node:path";
+
+// "/repo" is not absolute on Windows; see edited-files.test.ts.
+const REPO = path.resolve(path.sep, "repo");
+const at = (...segments: string[]): string => path.join(REPO, ...segments);
+
 
 const ctx = (width = 24): SidebarContext => ({
   width,
@@ -131,8 +137,8 @@ describe("isGenericToolName", () => {
 
 describe("pathHint", () => {
   it("takes the last segment and tolerates a trailing slash", () => {
-    expect(pathHint("/repo/src/app.ts")).toBe("app.ts");
-    expect(pathHint("/repo/src/")).toBe("src");
+    expect(pathHint(at("src", "app.ts"))).toBe("app.ts");
+    expect(pathHint(at("src"))).toBe("src");
     expect(pathHint("app.ts")).toBe("app.ts");
   });
 
@@ -197,10 +203,10 @@ describe("runningToolFromState", () => {
         latestTitle: "Edit",
         locations: [{ path: "src/tui/sidebar/gadgets.ts" }],
       }),
-      "/repo",
+      REPO,
     );
     expect(entry?.detail).toBe("gadgets.ts");
-    expect(entry?.path).toBe("/repo/src/tui/sidebar/gadgets.ts");
+    expect(entry?.path).toBe(at("src", "tui", "sidebar", "gadgets.ts"));
   });
 
   // Edit-style calls often carry their target ONLY on the diff payload;
@@ -214,10 +220,10 @@ describe("runningToolFromState", () => {
         locations: undefined,
         editDiff: { path: "src/tui/app.ts", oldText: "a", newText: "b" },
       }),
-      "/repo",
+      REPO,
     );
     expect(entry?.detail).toBe("app.ts");
-    expect(entry?.path).toBe("/repo/src/tui/app.ts");
+    expect(entry?.path).toBe(at("src", "tui", "app.ts"));
   });
 
   it("prefers an explicit detail over the location basename", () => {
@@ -225,7 +231,7 @@ describe("runningToolFromState", () => {
       state({
         rawKind: "execute",
         detail: "npm test",
-        locations: [{ path: "/repo" }],
+        locations: [{ path: REPO }],
       }),
       null,
     );
@@ -267,9 +273,9 @@ describe("runningToolFromState", () => {
   it("absolutizes reported paths against the session cwd", () => {
     const entry = runningToolFromState(
       state({ rawKind: "read", locations: [{ path: "src/app.ts" }] }),
-      "/repo",
+      REPO,
     );
-    expect(entry?.path).toBe("/repo/src/app.ts");
+    expect(entry?.path).toBe(at("src", "app.ts"));
     expect(entry?.verb).toBe("read");
   });
 });
@@ -355,10 +361,10 @@ describe("toolsGadget", () => {
 
   it("carries the path so a double-click opens the file", () => {
     const [line] = toolsGadget.render(
-      snap({ running: [tool({ verb: "edit", path: "/repo/src/app.ts" })] }),
+      snap({ running: [tool({ verb: "edit", path: at("src", "app.ts") })] }),
       ctx(),
     );
-    expect(line!.openPath).toBe("/repo/src/app.ts");
+    expect(line!.openPath).toBe(at("src", "app.ts"));
   });
 
   // Same trap the activity gadget documents: an un-quantized key would

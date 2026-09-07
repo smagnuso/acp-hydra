@@ -23,6 +23,7 @@ import { ExtensionManager } from "../core/extensions.js";
 import { TransformerManager } from "../core/transformer-manager.js";
 import { ExtensionCommandRegistry } from "../core/extension-commands.js";
 import { paths } from "../core/paths.js";
+import { ROLLING_LOG_SYMLINK_SUPPORTED } from "../core/rolling-log.js";
 import { writeDaemonPidFile } from "../core/daemon-pidfile.js";
 import { setBinaryInstallLogger } from "../core/binary-install.js";
 import { setNpmInstallLogger } from "../core/npm-install.js";
@@ -665,7 +666,7 @@ async function buildLogStream(level: string) {
     file: paths.logFile(),
     size: "10m",
     mkdir: true,
-    symlink: true,
+    symlink: ROLLING_LOG_SYMLINK_SUPPORTED,
     // Retain only the most recent files. Without this pino-roll
     // happily rotates forever; we've seen the directory grow into
     // the hundreds-of-MB range. Combined with the size cap above,

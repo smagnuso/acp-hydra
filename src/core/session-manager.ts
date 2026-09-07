@@ -5562,7 +5562,17 @@ export class SessionManager {
       const existing = await this.store.read(session.sessionId);
       const merged = mergeForPersistence(session, existing);
       await this.store.write(merged);
-    }).catch(() => undefined);
+    }).catch((err: unknown) => {
+      // Still non-fatal: a session that cannot write meta.json is worth
+      // keeping alive in memory. But this is the FIRST write for a brand
+      // new session, so swallowing it silently means the session runs
+      // normally and then vanishes at daemon restart with nothing on
+      // record anywhere. Say so.
+      this.logger?.warn(
+        `failed to persist session record for ${session.sessionId}: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
   }
 
   // Resolve a session's recorded history without forcing a resurrect.

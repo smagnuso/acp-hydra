@@ -18,11 +18,14 @@ export interface DirFilterable {
 // its own sessions.
 export function resolveDirFilter(input: string): string {
   const trimmed = input.trim();
-  const resolved = path.resolve(expandHome(trimmed.length === 0 ? "." : trimmed));
-  if (resolved.length > 1 && resolved.endsWith(path.sep)) {
-    return resolved.slice(0, -1);
-  }
-  return resolved;
+  // No trailing-separator trim: path.resolve already did it. The only
+  // resolved paths that still end in a separator are roots — "/", "D:\",
+  // "\\\\server\\share\\" — and those must keep it. The trim that used to
+  // live here guarded on `length > 1`, which reads as "not the root" but
+  // only excludes the POSIX one; a Windows drive root is three characters,
+  // so it was trimmed to a bare "D:", naming that drive's current
+  // directory rather than its root.
+  return path.resolve(expandHome(trimmed.length === 0 ? "." : trimmed));
 }
 
 // True when the session lives at `dir` or anywhere beneath it. Matches

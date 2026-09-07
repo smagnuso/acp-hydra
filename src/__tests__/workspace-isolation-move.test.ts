@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { SessionManager } from "../core/session-manager.js";
+import { shortenHomePath } from "../core/paths.js";
 import {
   drainSnapshots,
   exec,
@@ -377,7 +378,7 @@ describe("session isolation end-to-end: moving a live session", () => {
 
     const status = await manager.runWorkspaceAction(session.sessionId, "status");
     expect(status).toContain("Isolated in");
-    expect(status).toContain(repo);
+    expect(status).toContain(shortenHomePath(repo));
   });
 
   it("persists the recall watermark the swap installs", async () => {

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { homedir } from "node:os";
+import * as path from "node:path";
+import { fileUrlForPath } from "./format.js";
 import { thisMachine } from "../core/machine.js";
 import stringWidth from "string-width";
 import type { Terminal } from "terminal-kit";
@@ -2994,7 +2996,11 @@ describe("Screen block-click routing", () => {
     const all = writes.join("");
     spy.mockRestore();
     expect(all).toContain(
-      `file://${thisMachine()}${homedir()}/dev/proj/a.ts#L12`,
+      // Built with the same helper the renderer uses. Hand-splicing
+      // homedir() into a URL assumes a POSIX absolute path: on Windows
+      // that yields file://HOSTC:\Users\x/... rather than the correct
+      // file://HOST/C:/Users/x/...
+      fileUrlForPath(`${path.join(homedir(), "dev", "proj", "a.ts")}#L12`),
     );
     expect(all).not.toContain("~/dev/proj/a.ts#L12");
   });

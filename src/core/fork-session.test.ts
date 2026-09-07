@@ -15,6 +15,13 @@ import { Registry, type RegistryAgent } from "./registry.js";
 import { makeMockAgent, type MockAgentControls } from "../__tests__/test-utils.js";
 import { Session } from "./session.js";
 
+// Each waitFor below polls meta.json off disk while the manager writes it.
+// The 5s ceiling held on POSIX but not on a Windows runner under load, and
+// waitFor returns the moment its condition holds, so the headroom is only
+// spent when it is needed. Raised per file rather than globally so a
+// genuine hang elsewhere still trips the 10s default.
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
+
 const mockGenerate = generateSynopsis as ReturnType<typeof vi.fn>;
 
 function fakeRegistryAgent(id = "claude-code"): RegistryAgent {
@@ -746,7 +753,7 @@ describe("forkSession — two-phase fork (fast return)", () => {
           throw new Error(`Still running: forkSynthesisState=${forkMeta.forkSynthesisState}`);
         }
       },
-      { timeout: 5000, interval: 50 },
+      { timeout: 20_000, interval: 50 },
     );
 
     expect(forkMeta.synopsis).toEqual({ goal: "g" });
@@ -786,7 +793,7 @@ describe("forkSession — two-phase fork (background success)", () => {
           throw new Error(`Still running: forkSynthesisState=${meta.forkSynthesisState}`);
         }
       },
-      { timeout: 5000, interval: 50 },
+      { timeout: 20_000, interval: 50 },
     );
 
     expect(meta.synopsis).toEqual({ goal: "g" });
@@ -890,7 +897,7 @@ describe("forkSession — two-phase fork (mutateRecord failure tolerance)", () =
           throw new Error(`Still running: forkSynthesisState=${meta.forkSynthesisState}`);
         }
       },
-      { timeout: 5000, interval: 50 },
+      { timeout: 20_000, interval: 50 },
     );
 
     // Synopsis is NOT set because generation failed.
@@ -928,7 +935,7 @@ describe("forkSession — two-phase fork (background failure)", () => {
         meta = await readMeta(fork.sessionId);
         expect(meta.forkSynthesisState).toBeUndefined();
       },
-      { timeout: 5000, interval: 10 },
+      { timeout: 20_000, interval: 50 },
     );
 
     // Synopsis is NOT set because generation failed.
@@ -970,7 +977,7 @@ describe("forkSession — two-phase fork (immediately after return)", () => {
           throw new Error(`Still running: forkSynthesisState=${meta.forkSynthesisState}`);
         }
       },
-      { timeout: 5000, interval: 50 },
+      { timeout: 20_000, interval: 50 },
     );
 
     expect(meta.synopsis).toEqual({ goal: "g" });

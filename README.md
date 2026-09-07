@@ -939,6 +939,8 @@ The daemon exposes a process-management surface. Treat the service token like an
 
 The service token (stored at `~/.hydra-acp/auth-token`, mode 0600) is generated on `hydra-acp init` and required as `Authorization: Bearer <token>` for every REST call and as a WebSocket subprotocol or query parameter for `wss://.../acp`. The token never leaves `~/.hydra-acp/`.
 
+> **Windows:** mode 0600 is not enforcement there. Windows derives file access from ACLs, and Node's `chmod` only toggles the read-only bit, so `auth-token` (along with `config.json`, `peers.json`, `remotes.json`, and the session records) inherits whatever the parent directory grants. On a machine with more than one interactive user, restrict `%USERPROFILE%\.hydra-acp` yourself, e.g. `icacls "%USERPROFILE%\.hydra-acp" /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F"`.
+
 For remote access (binding to a non-loopback address), enable TLS via:
 
 ```json

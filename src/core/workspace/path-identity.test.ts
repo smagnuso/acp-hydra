@@ -116,6 +116,14 @@ describe("isSourceTreeBreach", () => {
     expect(isSourceTreeBreach("src/a.ts", SRC, WS)).toBe(false);
   });
 
+  it("does not flag a sibling directory sharing the source's prefix", () => {
+    expect(isSourceTreeBreach(`${SRC}-backup/a.ts`, SRC, WS)).toBe(false);
+  });
+
+  it("does not flag the source root itself", () => {
+    expect(isSourceTreeBreach(SRC, SRC, WS)).toBe(false);
+  });
+
   it("prefers the workspace when it is nested inside the source tree", () => {
     // With an inside-the-repo layout every workspace write also starts
     // with the source prefix; treating those as breaches would make the

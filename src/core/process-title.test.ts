@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   buildTitleFromArgv,
   setHydraProcessTitle,
@@ -38,20 +38,18 @@ describe("buildTitleFromArgv", () => {
 });
 
 describe("setHydraProcessTitle", () => {
-  let originalTitle: string;
-  beforeEach(() => {
-    originalTitle = process.title;
-  });
-  afterEach(() => {
-    process.title = originalTitle;
-  });
-
-  it("sets process.title to the full string regardless of platform", () => {
+  // These assert through an injected setTitle rather than reading
+  // process.title back. process.title is one value for the whole
+  // process, and vitest's thread pool runs many files in sibling
+  // workers that each set their own, so a read-back races them.
+  it("sets the title to the full string regardless of platform", () => {
+    const setTitle = vi.fn();
     setHydraProcessTitle("hydra cat -p watch logs --detach", {
       platform: "darwin",
       writeComm: vi.fn(),
+      setTitle,
     });
-    expect(process.title).toContain("hydra cat -p watch logs --detach");
+    expect(setTitle).toHaveBeenCalledWith("hydra cat -p watch logs --detach");
   });
 
   it("writes the user-invoked bin name to /proc/self/comm on Linux", () => {
@@ -87,14 +85,16 @@ describe("setHydraProcessTitle", () => {
     const writeComm = vi.fn(() => {
       throw new Error("EACCES: permission denied");
     });
+    const setTitle = vi.fn();
     expect(() =>
       setHydraProcessTitle("hydra cat -p test", {
         platform: "linux",
         writeComm,
         commName: "hydra",
+        setTitle,
       }),
     ).not.toThrow();
-    // process.title should still have been set even though comm failed.
-    expect(process.title).toContain("hydra cat -p test");
+    // The title is still set even though comm failed.
+    expect(setTitle).toHaveBeenCalledWith("hydra cat -p test");
   });
 });

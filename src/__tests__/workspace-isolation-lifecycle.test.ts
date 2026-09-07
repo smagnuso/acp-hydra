@@ -468,9 +468,15 @@ describe("session isolation end-to-end: lifecycle", () => {
     // as the gap is visible.
     const repo = await makeGitRepo();
     await fs.mkdir(path.join(repo, ".hydra"), { recursive: true });
+    // cmd.exe reads `;` as a delimiter rather than a separator, so the
+    // POSIX spelling echoes the whole tail and exits 0.
+    const postCreate =
+      process.platform === "win32"
+        ? "echo install blew up 1>&2 & exit 1"
+        : "echo 'install blew up' >&2; exit 1";
     await fs.writeFile(
       path.join(repo, ".hydra/worktree.json"),
-      JSON.stringify({ postCreate: "echo 'install blew up' >&2; exit 1" }),
+      JSON.stringify({ postCreate }),
     );
     await exec("git", ["add", "-A"], { cwd: repo });
     await exec("git", ["commit", "-q", "-m", "bad config"], { cwd: repo });

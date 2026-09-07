@@ -221,7 +221,12 @@ export function pathHint(path: string | undefined): string {
   if (path === undefined) {
     return "";
   }
-  const parts = path.split("/").filter((p) => p !== "");
+  // Both separators, always. A Windows path contains no forward slash,
+  // so splitting on one yielded a single segment and the gadget showed
+  // `D:\repo\src\tui\app.ts` where it means to show `app.ts`. Agents also
+  // emit forward slashes on Windows, so either can arrive here and a
+  // single path.sep check would miss the other half of the time.
+  const parts = path.split(/[\\/]/).filter((p) => p !== "");
   return parts.at(-1) ?? "";
 }
 

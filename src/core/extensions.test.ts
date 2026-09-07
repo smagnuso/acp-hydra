@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { ExtensionManager, type ExtensionContext } from "./extensions.js";
+import { resolveRollingLogPath } from "./rolling-log.js";
 import { DEFAULT_DAEMON_PORT } from "./config.js";
 import type { ExtensionConfig } from "./config.js";
 
@@ -225,13 +226,16 @@ describe("ExtensionManager", () => {
     // load. The "starting extension loggy" line comes from the manager
     // itself and is in place by the time start() resolves, but we still
     // poll both checks together for symmetry.
+    //
+    // Read through resolveRollingLogPath rather than opening current.log
+    // directly: on Windows pino-roll cannot create that symlink, so the
+    // active file is the newest `<base>.<N>` sibling. Resolving inside the
+    // poll also survives a rotation between attempts.
     const logPath = path.join(tmpHome, "extensions", "loggy", "current.log");
-    await expect
-      .poll(async () => await fs.readFile(logPath, "utf8"), { timeout: 3_000 })
-      .toContain("starting extension loggy");
-    await expect
-      .poll(async () => await fs.readFile(logPath, "utf8"), { timeout: 3_000 })
-      .toContain("probe ready");
+    const readLog = async (): Promise<string> =>
+      await fs.readFile(await resolveRollingLogPath(logPath), "utf8");
+    await expect.poll(readLog, { timeout: 3_000 }).toContain("starting extension loggy");
+    await expect.poll(readLog, { timeout: 3_000 }).toContain("probe ready");
   });
 
   describe("per-name lifecycle", () => {
@@ -255,7 +259,10 @@ describe("ExtensionManager", () => {
       expect(info[0]?.enabled).toBe(true);
       expect(info[0]?.restartCount).toBe(0);
       expect(info[0]?.startedAt).toBeGreaterThan(0);
-      expect(info[0]?.logPath).toContain("extensions/lst/current.log");
+      // A filesystem path, so it carries native separators.
+      expect(info[0]?.logPath).toContain(
+        path.join("extensions", "lst", "current.log"),
+      );
     });
 
     it("stopByName() suppresses auto-restart (manuallyStopped flag)", async () => {

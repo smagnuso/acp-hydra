@@ -16,13 +16,20 @@
 // they also pin the abstract contract: listNested / captureNested /
 // reproduceNested / integrateNested.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { GitProvider } from "./git-provider.js";
 import { nestedHasWork, type IsolationProvider, type Workspace } from "./provider.js";
+
+// Same bargain the workspace-isolation suites make: a submodule fixture is
+// a dozen-odd real git subprocesses before the test body starts, and
+// process creation on Windows costs several times what it does on POSIX.
+// Raised per file rather than globally so a genuine hang elsewhere still
+// trips the 10s default.
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 
 const provider: IsolationProvider = new GitProvider();
 

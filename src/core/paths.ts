@@ -8,13 +8,40 @@ export function shortenHomePath(p: string): string {
   if (!home) {
     return p;
   }
-  if (p === home) {
+  // Separator- and case-insensitive on Windows. A path under the home
+  // directory routinely arrives there with BOTH separators in one string
+  // (`C:\Users\x/dev/proj`) because git reports forward slashes on
+  // Windows and agents pass those through verbatim. Matching only on
+  // path.sep silently stopped shortening those, so every such path
+  // rendered as a full absolute path instead of `~/...`.
+  //
+  // Normalizing preserves length, so the suffix is still sliced out of
+  // the original and keeps whatever separators the caller used.
+  const normalize = (s: string): string =>
+    process.platform === "win32" ? s.replace(/\\/g, "/").toLowerCase() : s;
+  const normalizedHome = normalize(home);
+  const normalizedPath = normalize(p);
+  if (normalizedPath === normalizedHome) {
     return "~";
   }
-  if (p.startsWith(home + "/")) {
+  if (normalizedPath.startsWith(normalizedHome + "/")) {
     return "~" + p.slice(home.length);
   }
   return p;
+}
+
+// Compare two filesystem paths for identity, tolerating separator and
+// trailing-slash differences.
+//
+// Case is folded on Windows only. macOS is case-insensitive by default
+// but can be formatted case-sensitive, so folding there could report two
+// genuinely different directories as one; Windows has no such ambiguity.
+export function samePath(a: string, b: string): boolean {
+  const normalize = (p: string): string =>
+    process.platform === "win32"
+      ? path.resolve(p).toLowerCase()
+      : path.resolve(p);
+  return normalize(a) === normalize(b);
 }
 
 // Identify a test runner from process signals, or undefined for a real run.
@@ -39,10 +66,41 @@ export function detectTestRunner(): string | undefined {
   return undefined;
 }
 
+// Warned at most once per process. hydraHome() is called on every
+// paths.* access, so an unguarded write here would be a torrent.
+let warnedRelativeHome = false;
+
+// A relative HYDRA_ACP_HOME resolves against the CURRENT WORKING
+// DIRECTORY, so two processes handed the identical value root themselves
+// in different places when launched from different directories. An
+// editor launches the shim with the project directory as cwd; a human
+// starts the daemon from wherever their shell happens to be. The result
+// is a client that cannot see a running daemon, starts a second one,
+// and watches it fail to bind the port the first one holds.
+//
+// Not an error, because a deliberate per-project home is a legitimate
+// thing to want. But it is never what someone means for a daemon that
+// outlives the shell that started it, so say so once, with both the raw
+// value and what it actually resolved to.
+function warnIfRelativeHome(override: string, resolved: string): void {
+  if (warnedRelativeHome || path.isAbsolute(override)) {
+    return;
+  }
+  warnedRelativeHome = true;
+  process.stderr.write(
+    `hydra-acp: ${ROOT_ENV} is relative (${JSON.stringify(override)}); ` +
+      `resolved against the current directory to ${resolved}. Processes ` +
+      `started from elsewhere will use a different home and will not see ` +
+      `each other's daemon. Set an absolute path.\n`,
+  );
+}
+
 export function hydraHome(): string {
   const override = process.env[ROOT_ENV];
   if (override && override.length > 0) {
-    return path.resolve(override);
+    const resolved = path.resolve(override);
+    warnIfRelativeHome(override, resolved);
+    return resolved;
   }
   // Safety net: under ANY test runner, never silently fall back to the
   // developer's real ~/.hydra-acp. vitest.setup.ts clamps HYDRA_ACP_HOME to
@@ -87,6 +145,12 @@ export const paths = {
   peers: () => path.join(hydraHome(), "peers.json"),
   pidFile: () => path.join(hydraHome(), "daemon.pid"),
   logFile: () => path.join(hydraHome(), "daemon.log"),
+  // Startup failures only. spawnDaemonDetached wires the daemon's stderr
+  // to nothing, so a daemon that dies before it can open daemon.log (port
+  // already bound, unwritable log dir, bad config) would otherwise leave
+  // no trace at all and surface only as a readiness timeout. Written by
+  // daemon-entry's top-level catch, read back by waitForDaemonReady.
+  daemonBootLog: () => path.join(hydraHome(), "daemon-boot.log"),
   currentLogFile: () => path.join(hydraHome(), "current.log"),
   registryCache: () => path.join(hydraHome(), "registry.json"),
   // User-authored colour themes, one JSON file per theme. A file here shadows a

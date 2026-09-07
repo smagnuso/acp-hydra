@@ -17,7 +17,22 @@ setControlWriter(() => {});
 
 // Worker-wide root for per-test tmp dirs. Created once at module load
 // and torn down in afterAll so the OS doesn't have to garbage-collect us.
-const workerRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hydra-acp-vitest-"));
+// realpathSync.NATIVE, specifically. os.tmpdir() reads TEMP, which
+// GitHub's Windows runners set to an 8.3 short path
+// (C:\Users\RUNNER~1\...), while git reports the long form
+// (C:\Users\runneradmin\...). Those name one directory and compare
+// unequal. HYDRA_ACP_HOME is minted under this root, so leaving it short
+// leaks that spelling into every product-side path while fixtures use
+// the long one.
+//
+// The plain fs.realpathSync does NOT fix this: it resolves symlinks by
+// walking with lstat and leaves an 8.3 component exactly as it found it.
+// Only the .native variant goes through the OS call that expands it.
+// Both settle the macOS /var -> /private/var case, so the native one is
+// strictly the better default here.
+const workerRoot = fs.realpathSync.native(
+  fs.mkdtempSync(path.join(os.tmpdir(), "hydra-acp-vitest-")),
+);
 
 // Every `git init` in this suite otherwise copies from the developer's
 // init.templateDir, which makes the tests depend on a directory outside
@@ -102,16 +117,37 @@ afterEach(() => {
     // fails with ENOTEMPTY. maxRetries/retryDelay tells Node to retry on
     // exactly that code (also EBUSY/EMFILE/ENFILE/EPERM), which gives
     // those stragglers enough time to land and be swept on the next pass.
-    fs.rmSync(currentHome, {
-      recursive: true,
-      force: true,
-      maxRetries: 5,
-      retryDelay: 10,
-    });
+    // The retry budget has to cover a loaded CI runner, not just a fast
+    // dev box; 5x10ms was enough locally and not on macOS runners.
+    try {
+      fs.rmSync(currentHome, {
+        recursive: true,
+        force: true,
+        maxRetries: 20,
+        retryDelay: 50,
+      });
+    } catch {
+      // A straggler that outlasts even that budget must not fail a test
+      // that already passed. The per-worker root this lives under is
+      // removed wholesale in afterAll, so nothing leaks beyond the run.
+    }
     currentHome = undefined;
   }
 });
 
 afterAll(() => {
-  fs.rmSync(workerRoot, { recursive: true, force: true });
+  // Same race as afterEach, one level up: hardening only the per-test
+  // sweep just moved the ENOTEMPTY here, where it fails the whole file
+  // rather than one test. The root is a mkdtemp under os.tmpdir(), so
+  // the worst case of giving up is a directory the OS reaps later.
+  try {
+    fs.rmSync(workerRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 50,
+    });
+  } catch {
+    // Deliberately ignored; see above.
+  }
 });

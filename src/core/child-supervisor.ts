@@ -6,8 +6,10 @@ import createPinoRoll from "pino-roll";
 import type { SonicBoom } from "sonic-boom";
 import type { ProcessTokenRegistry } from "../daemon/auth.js";
 import { RestartBreaker, type BreakerOptions } from "./restart-breaker.js";
+import { ROLLING_LOG_SYMLINK_SUPPORTED } from "./rolling-log.js";
 import { expandHome } from "./config.js";
 import { scrubInheritedEnv } from "./scrub-env.js";
+import { resolveSpawnTarget } from "./windows-command.js";
 
 // Shared lifecycle for daemon-supervised child processes (extensions and
 // transformers). Each kind passes a SupervisorAdapter for the bits that
@@ -485,7 +487,7 @@ export class ChildSupervisor<TConfig extends BaseChildConfig> {
         file: path.join(logDir, `${cfg.name}.log`),
         size: "5m",
         mkdir: true,
-        symlink: true,
+        symlink: ROLLING_LOG_SYMLINK_SUPPORTED,
         limit: { count: 5 },
       });
       // pino-roll / sonic-boom emit 'error' asynchronously when a
@@ -563,10 +565,16 @@ export class ChildSupervisor<TConfig extends BaseChildConfig> {
 
     let child: ChildProcess;
     try {
-      child = spawn(cmd, args, {
+      // An extension installed as an npm global bin is `<name>.cmd` on
+      // Windows, which spawn() cannot find by bare name or launch without
+      // a shell. Identity on every other platform.
+      const target = resolveSpawnTarget(cmd, args);
+      child = spawn(target.command, target.args, {
         env,
         stdio: ["ignore", "pipe", "pipe"],
         detached: false,
+        shell: target.shell,
+        windowsHide: true,
       });
     } catch (err) {
       logStream.write(

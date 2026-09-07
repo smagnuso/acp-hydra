@@ -58,15 +58,37 @@ const OSC8_HOST = thisMachine();
 // the file-links skill emits) and terminal handlers differ on whether
 // they want `#42` or `#L42`, so rewriting it would just trade one
 // incompatibility for another.
+// Encode an absolute local path as the path component of a file URL.
+//
+// On Windows a path has no forward slashes at all, so splitting on "/"
+// yielded a single segment and encoded the separators themselves:
+// `D:\a\b` came out as `D%3A%5Ca%5Cb`, which no terminal will open. The
+// drive letter also needs a leading slash and an unencoded colon, the
+// `file:///D:/a/b` form every Windows consumer expects.
+//
+// The backslash rewrite is win32-only on purpose: a backslash is a legal
+// character in a POSIX filename, and rewriting it there would corrupt
+// the path rather than fix it.
+function encodeFileUrlPath(absPath: string): string {
+  const forward =
+    process.platform === "win32" ? absPath.replace(/\\/g, "/") : absPath;
+  const drive = /^([A-Za-z]):(\/.*)?$/.exec(forward);
+  const prefix = drive ? `/${drive[1]}:` : "";
+  const rest = drive ? (drive[2] ?? "/") : forward;
+  return (
+    prefix +
+    rest
+      .split("/")
+      .map((seg) => encodeURIComponent(seg))
+      .join("/")
+  );
+}
+
 export function fileUrlForPath(absPath: string): string {
   const hashAt = absPath.indexOf("#");
   const path = hashAt === -1 ? absPath : absPath.slice(0, hashAt);
   const fragment = hashAt === -1 ? "" : absPath.slice(hashAt);
-  const encoded = path
-    .split("/")
-    .map((seg) => encodeURIComponent(seg))
-    .join("/");
-  return `file://${OSC8_HOST}${encoded}${fragment}`;
+  return `file://${OSC8_HOST}${encodeFileUrlPath(path)}${fragment}`;
 }
 
 // Build a file:// URI for an absolute directory, for OSC 7 cwd reporting.
@@ -78,11 +100,7 @@ export function fileUrlForPath(absPath: string): string {
 // `foo#bar` must be encoded rather than treated as a fragment or the path
 // silently truncates.
 export function fileUriForCwd(absPath: string): string {
-  const encoded = absPath
-    .split("/")
-    .map((seg) => encodeURIComponent(seg))
-    .join("/");
-  return `file://${encoded}`;
+  return `file://${encodeFileUrlPath(absPath)}`;
 }
 
 export type Style =

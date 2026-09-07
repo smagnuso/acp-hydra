@@ -15,6 +15,7 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import { CopyProvider } from "./copy-provider.js";
 import { GitProvider } from "./git-provider.js";
+import { shortenHomePath } from "../paths.js";
 import {
   WorkspaceUnsupportedError,
   type IsolationProvider,
@@ -278,7 +279,7 @@ describe("git provider specifics", () => {
   it("says it is in sync with the source when neither side has moved", async () => {
     const { provider, source, ws } = await gitWorkspace("insync");
     const report = (await provider.statusReport(ws)).join("\n");
-    expect(report).toContain(`in sync with ${source}`);
+    expect(report).toContain(`in sync with ${shortenHomePath(source)}`);
   });
 
   it("counts the source's new commits and names the verb that brings them in", async () => {
@@ -557,4 +558,43 @@ describe("copy provider specifics", () => {
     }
     await expect(fs.access(path.join(res.workspace.path, ".git"))).rejects.toThrow();
   });
+
+  // Windows needs Developer Mode or admin rights to make a symlink, and
+  // the aliasing this pins is not Windows-specific, so reproduce it with
+  // the vehicle POSIX has. It is how the bug was found, though: the 8.3
+  // short path a Windows tmpdir reports is the same shape of alias.
+  it.skipIf(process.platform === "win32")(
+    "does not copy .git when reached through a symlinked source",
+    async () => {
+      // fs.cp given an aliased directory calls `filter` once for the root
+      // and then copies the dereferenced tree without consulting it
+      // again, so the skip list silently stops applying. A symlinked
+      // project directory is ordinary, and the result was a copied .git
+      // presenting as a detached repository.
+      const provider = new CopyProvider();
+      const real = await makeGitSource();
+      const alias = path.join(path.dirname(real), `${path.basename(real)}-link`);
+      await fs.symlink(real, alias);
+
+      const res = await provider.createWorkspace({ sourceCwd: alias, label: "nogitlink" });
+      expect(res.ok).toBe(true);
+      if (!res.ok) {
+        return;
+      }
+      // The workspace must be a real directory. fs.cp given a symlink
+      // copies the LINK, so the workspace would have been an alias for
+      // the user's own tree: .git visible through it, and every write
+      // inside the "isolated" workspace landing in the source. The
+      // .git assertion below is the symptom; this is the disease.
+      expect((await fs.lstat(res.workspace.path)).isSymbolicLink()).toBe(false);
+      await expect(fs.access(path.join(res.workspace.path, ".git"))).rejects.toThrow();
+      // The rest of the tree still came across, as content rather than
+      // as a view onto the original.
+      expect(await fs.readFile(path.join(res.workspace.path, "file.txt"), "utf8")).toBe(
+        "original\n",
+      );
+      await fs.writeFile(path.join(res.workspace.path, "file.txt"), "changed\n");
+      expect(await fs.readFile(path.join(real, "file.txt"), "utf8")).toBe("original\n");
+    },
+  );
 });

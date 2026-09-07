@@ -1,12 +1,36 @@
 import { describe, it, expect } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { readJsonSafe, writeFileAtomic, writeJsonAtomic } from "./json-store.js";
+import {
+  readJsonSafe,
+  renameWithRetry,
+  writeFileAtomic,
+  writeJsonAtomic,
+} from "./json-store.js";
 import { paths } from "./paths.js";
+import { expectOwnerOnlyMode } from "../__tests__/test-utils.js";
 
 function p(name: string): string {
   return path.join(paths.home(), name);
 }
+
+describe("writeFileAtomic parent directory creation", () => {
+  it("creates a missing parent directory", async () => {
+    // SessionStore.write relies on this entirely: nothing else mkdirs a
+    // session directory before meta.json lands in it. The parent lookup
+    // used to split on "/" by hand, which yields "." for a Windows path
+    // and left the real directory uncreated.
+    const nested = p(path.join("sessions", "sess_abc", "meta.json"));
+    await writeJsonAtomic(nested, { sessionId: "sess_abc" });
+    expect(await readJsonSafe(nested)).toEqual({ sessionId: "sess_abc" });
+  });
+
+  it("creates several missing levels at once", async () => {
+    const deep = p(path.join("a", "b", "c", "d.json"));
+    await writeJsonAtomic(deep, { ok: true });
+    expect(await readJsonSafe(deep)).toEqual({ ok: true });
+  });
+});
 
 describe("readJsonSafe", () => {
   it("returns undefined when the file is missing", async () => {
@@ -69,7 +93,7 @@ describe("writeJsonAtomic", () => {
     const target = p("secret.json");
     await writeJsonAtomic(target, { token: "x" }, { mode: 0o600 });
     const stat = await fs.stat(target);
-    expect(stat.mode & 0o777).toBe(0o600);
+    expectOwnerOnlyMode(stat.mode);
   });
 
   it("creates the parent directory if missing", async () => {
@@ -115,7 +139,7 @@ describe("writeFileAtomic", () => {
     await writeFileAtomic(target, "hello\n", { mode: 0o600 });
     expect(await fs.readFile(target, "utf8")).toBe("hello\n");
     const stat = await fs.stat(target);
-    expect(stat.mode & 0o777).toBe(0o600);
+    expectOwnerOnlyMode(stat.mode);
   });
 
   it("writes through a symlink instead of replacing it", async () => {
@@ -147,5 +171,66 @@ describe("writeFileAtomic", () => {
 
     expect((await fs.lstat(link)).isSymbolicLink()).toBe(true);
     expect(await fs.readFile(realTarget, "utf8")).toBe('{"v":2}\n');
+  });
+});
+
+describe("renameWithRetry", () => {
+  const err = (code: string): NodeJS.ErrnoException =>
+    Object.assign(new Error(code), { code });
+
+  const attempts = (
+    fail: number,
+    code = "EPERM",
+  ): { rename: (a: string, b: string) => Promise<void>; count: () => number } => {
+    let n = 0;
+    return {
+      count: () => n,
+      rename: async () => {
+        n += 1;
+        if (n <= fail) {
+          throw err(code);
+        }
+      },
+    };
+  };
+
+  const noSleep = async (): Promise<void> => undefined;
+
+  it("retries a transient Windows rename and succeeds", async () => {
+    // Antivirus or the indexer holding the destination open. Fire-and-
+    // forget callers swallow the rejection, so without the retry the
+    // symptom is silently unpersisted state, not an error.
+    const a = attempts(3);
+    await renameWithRetry("a", "b", {
+      rename: a.rename,
+      platform: "win32",
+      sleep: noSleep,
+    });
+    expect(a.count()).toBe(4);
+  });
+
+  it("gives up rather than spinning forever", async () => {
+    const a = attempts(Number.MAX_SAFE_INTEGER);
+    await expect(
+      renameWithRetry("a", "b", { rename: a.rename, platform: "win32", sleep: noSleep }),
+    ).rejects.toThrow("EPERM");
+    expect(a.count()).toBe(10);
+  });
+
+  it("does not retry a code that is not transient", async () => {
+    const a = attempts(Number.MAX_SAFE_INTEGER, "ENOENT");
+    await expect(
+      renameWithRetry("a", "b", { rename: a.rename, platform: "win32", sleep: noSleep }),
+    ).rejects.toThrow("ENOENT");
+    expect(a.count()).toBe(1);
+  });
+
+  it("does not retry off Windows, where rename has no such failure mode", async () => {
+    // Retrying here would mask a real EPERM instead of reporting it.
+    const a = attempts(1);
+    await expect(
+      renameWithRetry("a", "b", { rename: a.rename, platform: "linux", sleep: noSleep }),
+    ).rejects.toThrow("EPERM");
+    expect(a.count()).toBe(1);
   });
 });

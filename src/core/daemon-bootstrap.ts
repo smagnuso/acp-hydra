@@ -6,8 +6,9 @@ import { invokedBinName } from "./bin-name.js";
 import type { HydraConfig } from "./config.js";
 import { computeConfigDigest } from "./config-digest.js";
 import { scrubInheritedEnv, setExtraScrubbedEnv } from "./scrub-env.js";
+import { readDaemonBootFailure } from "./daemon-boot-log.js";
 import { isProcessAlive, readDaemonPidFile } from "./daemon-pidfile.js";
-import { paths } from "./paths.js";
+import { paths, samePath } from "./paths.js";
 import type { RemoteTarget } from "./remote-target.js";
 
 // Read the daemon's pidfile to learn the plain-HTTP loopback URL it's
@@ -49,7 +50,7 @@ export async function probeDaemon(config: HydraConfig): Promise<DaemonProbe> {
   // store, which is the case the WS handshake would fail on. Reported
   // directly since this field exists rather than inferred from a hash of
   // unrelated settings.
-  if (health.home !== undefined && health.home !== paths.home()) {
+  if (health.home !== undefined && !samePath(health.home, paths.home())) {
     return "mismatch";
   }
   if (health.configDigest === undefined) {
@@ -212,6 +213,9 @@ export function spawnDaemonDetached(config?: HydraConfig): void {
   const child = spawn(process.execPath, [daemonBundle], {
     detached: true,
     stdio: "ignore",
+    // Without this a detached child gets its own console window on
+    // Windows, so every daemon start would flash up a stray shell.
+    windowsHide: true,
     env: scrubInheritedEnv(),
   });
   child.unref();
@@ -249,14 +253,67 @@ export async function waitForDaemonReady(
   config: HydraConfig,
   timeoutMs = 15_000,
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
   while (Date.now() < deadline) {
     if (await pingHealth(config)) {
       return;
     }
     await sleep(150);
   }
+  // A daemon that died on startup already said why; without this the
+  // caller gets a timeout that reads identically for a port collision, a
+  // bad config, and an unwritable home.
+  const failure = await readDaemonBootFailure(startedAt);
+  const collision = await describePortCollision(config);
   throw new Error(
-    `hydra-acp daemon did not become ready within ${timeoutMs}ms`,
+    `hydra-acp daemon did not become ready within ${timeoutMs}ms` +
+      (failure
+        ? `\nthe daemon exited during startup:\n${failure}`
+        : `\nno startup error was recorded in ${paths.daemonBootLog()}; ` +
+          `the daemon may be running under a different HYDRA_ACP_HOME ` +
+          `(this one is ${paths.home()})`) +
+      collision,
+  );
+}
+
+/**
+ * Name the daemon squatting on our port, when there is one.
+ *
+ * The failure this rescues: someone's client and their daemon disagree
+ * about HYDRA_ACP_HOME (a relative value resolved from two different
+ * working directories is the easy way in). The client sees no pidfile in
+ * its own home, concludes nothing is running, starts a daemon, and that
+ * daemon cannot bind the port the FIRST one still holds. Every symptom
+ * points at the daemon we just started; nothing points at the one that
+ * was already there.
+ *
+ * /v1/health needs no auth precisely so this kind of probe works, and it
+ * reports the daemon's resolved home — which is the whole answer.
+ */
+async function describePortCollision(config: HydraConfig): Promise<string> {
+  const health = await fetch(
+    `http://127.0.0.1:${config.daemon.port}/v1/health`,
+    { signal: AbortSignal.timeout(1_000), headers: { Connection: "close" } },
+  ).catch(() => undefined);
+  if (!health || !health.ok) {
+    return "";
+  }
+  const body = (await health.json().catch(() => undefined)) as
+    | { home?: unknown }
+    | undefined;
+  const theirs = typeof body?.home === "string" ? body.home : undefined;
+  const ours = paths.home();
+  if (theirs === undefined || samePath(theirs, ours)) {
+    return "";
+  }
+  return (
+    `\n\nA daemon IS already listening on 127.0.0.1:${config.daemon.port}, ` +
+    `but it is rooted at a different HYDRA_ACP_HOME:\n` +
+    `  it is using   ${theirs}\n` +
+    `  this process  ${ours}\n` +
+    `That is why the daemon started here could not bind. Point both at ` +
+    `the same absolute HYDRA_ACP_HOME, or give this one its own ` +
+    `daemon.port.`
   );
 }

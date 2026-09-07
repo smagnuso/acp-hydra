@@ -11,7 +11,16 @@ import {
 const temps: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(temps.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })));
+  // Retry: a hook killed at its timeout may not have released the
+  // workspace yet, and Windows refuses to remove a directory that is any
+  // live process's cwd. On POSIX the first attempt always wins.
+  await Promise.all(
+    temps
+      .splice(0)
+      .map((d) =>
+        fs.rm(d, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }),
+      ),
+  );
 });
 
 async function tmp(prefix: string): Promise<string> {
@@ -106,6 +115,29 @@ describe("applyCarry", () => {
     expect(await fs.readFile(path.join(ws, "config/secrets.json"), "utf8")).toBe("{}\n");
   });
 
+  it.skipIf(process.platform === "win32")(
+    "carries the content of a symlinked file, not the link",
+    async () => {
+      // A carried `.env` is very often a symlink (dotfile managers,
+      // direnv, monorepo layouts). fs.cp copies a symlink as a symlink,
+      // so without dereference the workspace's copy still points at the
+      // source and the first write inside the workspace edits the user's
+      // real file — the exact isolation this feature exists to give.
+      const src = await tmp("hydra-carry-link-src-");
+      const ws = await tmp("hydra-carry-link-ws-");
+      const outside = path.join(src, "real.env");
+      await fs.writeFile(outside, "SECRET=1\n");
+      await fs.symlink(outside, path.join(src, ".env"));
+
+      const res = await applyCarry(src, ws, [".env"]);
+      expect(res.copied).toEqual([".env"]);
+      expect((await fs.lstat(path.join(ws, ".env"))).isSymbolicLink()).toBe(false);
+
+      await fs.writeFile(path.join(ws, ".env"), "TAMPERED=1\n");
+      expect(await fs.readFile(outside, "utf8")).toBe("SECRET=1\n");
+    },
+  );
+
   it("refuses to escape either tree", async () => {
     // Carry entries are repo config, and repo config can arrive on a
     // branch someone else wrote.
@@ -129,12 +161,24 @@ describe("runWorkspaceHook", () => {
   it("runs in the workspace and receives context as env", async () => {
     const src = await tmp("hydra-hook-src-");
     const ws = await tmp("hydra-hook-ws-");
-    const res = await runWorkspaceHook(
-      'printf "%s|%s" "$PWD" "$HYDRA_SOURCE_CWD" > marker.txt',
-      { workspacePath: ws, sourceCwd: src, label: "l" },
-    );
+    // A hook is a shell command string, so it is written in whichever
+    // shell the platform runs it under: exec() is `/bin/sh -c` on POSIX
+    // and `cmd.exe /d /s /c` on Windows, which spells variables %NAME%
+    // and has no printf. This is the documented tradeoff of accepting a
+    // command string rather than an argv.
+    const hook =
+      process.platform === "win32"
+        ? "echo %CD%^|%HYDRA_SOURCE_CWD%> marker.txt"
+        : 'printf "%s|%s" "$PWD" "$HYDRA_SOURCE_CWD" > marker.txt';
+    const res = await runWorkspaceHook(hook, {
+      workspacePath: ws,
+      sourceCwd: src,
+      label: "l",
+    });
     expect(res.ok).toBe(true);
-    expect(await fs.readFile(path.join(ws, "marker.txt"), "utf8")).toBe(`${ws}|${src}`);
+    expect((await fs.readFile(path.join(ws, "marker.txt"), "utf8")).trim()).toBe(
+      `${ws}|${src}`,
+    );
   });
 
   it("also receives context as JSON on stdin", async () => {
@@ -154,7 +198,13 @@ describe("runWorkspaceHook", () => {
     // A broken setup command must not take the session down: a session
     // in a half-set-up workspace is more useful than no session.
     const ws = await tmp("hydra-hook-ws3-");
-    const res = await runWorkspaceHook("echo 'boom' >&2; exit 3", {
+    // cmd.exe reads `;` as a delimiter rather than a separator, so the
+    // POSIX spelling echoes the whole tail and exits 0.
+    const hook =
+      process.platform === "win32"
+        ? "echo boom 1>&2 & exit 3"
+        : "echo 'boom' >&2; exit 3";
+    const res = await runWorkspaceHook(hook, {
       workspacePath: ws,
       sourceCwd: ws,
       label: "l",
@@ -165,7 +215,12 @@ describe("runWorkspaceHook", () => {
 
   it("kills a hook that overruns its timeout", async () => {
     const ws = await tmp("hydra-hook-ws4-");
-    const res = await runWorkspaceHook("sleep 5", {
+    // cmd.exe has no `sleep`, so the POSIX spelling would exit nonzero
+    // immediately and satisfy the assertion without ever timing out.
+    // `timeout` is no good either — it refuses a redirected stdin, which
+    // is exactly what a hook gets — so idle with ping.
+    const hook = process.platform === "win32" ? "ping -n 6 127.0.0.1 >nul" : "sleep 5";
+    const res = await runWorkspaceHook(hook, {
       workspacePath: ws,
       sourceCwd: ws,
       label: "l",

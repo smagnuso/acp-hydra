@@ -8,6 +8,7 @@ import {
   verifyPassword,
 } from "./password.js";
 import { paths } from "./paths.js";
+import { expectOwnerOnlyMode } from "../__tests__/test-utils.js";
 
 function hashPath(): string {
   return path.join(paths.home(), "password-hash");
@@ -22,7 +23,7 @@ describe("password", () => {
     await setPassword("correct horse battery staple");
     expect(await hasPassword()).toBe(true);
     const stat = await fs.stat(hashPath());
-    expect(stat.mode & 0o777).toBe(0o600);
+    expectOwnerOnlyMode(stat.mode);
     const text = (await fs.readFile(hashPath(), "utf8")).trim();
     expect(text.startsWith("scrypt$")).toBe(true);
     // scrypt$N$r$p$salt$key -> 6 fields

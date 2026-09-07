@@ -43,17 +43,26 @@ export interface SetTitleDeps {
   // invokedBinName(); tests pin it to a known value rather than
   // mutating process.argv.
   commName?: string;
+  // The process-title writer. Defaults to assigning process.title.
+  // Tests inject a spy: process.title is a single process-wide value
+  // that every vitest worker thread shares, so reading it back to
+  // assert on it races whatever the other workers are doing.
+  setTitle?: (text: string) => void;
 }
 
 const defaultWriteComm = (text: string): void => {
   writeFileSync("/proc/self/comm", text);
 };
 
+const defaultSetTitle = (text: string): void => {
+  process.title = text;
+};
+
 export function setHydraProcessTitle(
   fullTitle: string,
   deps: SetTitleDeps = {},
 ): void {
-  process.title = fullTitle;
+  (deps.setTitle ?? defaultSetTitle)(fullTitle);
   const platform = deps.platform ?? process.platform;
   if (platform !== "linux") {
     return;

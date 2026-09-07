@@ -614,7 +614,15 @@ describe("Screen sidebar double-click to open", () => {
     expect(close).toBeGreaterThan(open);
     // Whatever is bracketed must not include the +/- delta or run of gap
     // spaces — that was the bug: the terminal underlined the whole row.
-    const bracketed = all.slice(open, close);
+    //
+    // Measure the LABEL, not the whole sequence. Slicing from `open`
+    // also swallowed the `file://<host>/...` URI, so the assertion was
+    // really being made against this machine's hostname: any host
+    // containing "-1" (a CI runner named iad20-gt1023-1e64a487-... for
+    // instance) failed a test about sidebar rendering.
+    const openEnd = all.indexOf("\x1b\\", open);
+    expect(openEnd).toBeGreaterThan(open);
+    const bracketed = all.slice(openEnd + 2, close);
     expect(bracketed).not.toContain("+3");
     expect(bracketed).not.toContain("-1");
     expect(bracketed).not.toMatch(/ {3}/);

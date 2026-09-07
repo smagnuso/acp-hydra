@@ -1,8 +1,10 @@
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
+import { delimiter as pathDelimiter } from "node:path";
 import { spawn } from "node:child_process";
 import { paths } from "./paths.js";
 import { currentPlatformKey } from "./binary-install.js";
+import { resolveSpawnTarget } from "./windows-command.js";
 
 // Where npm-install routes its human-readable progress lines. Mirrors
 // binary-install's sink so the daemon can swap in pino routing on
@@ -209,20 +211,26 @@ async function runNpmInstallOnce(
   try {
     await new Promise<void>((resolve, reject) => {
       const registryArgs = args.registry ? ["--registry", args.registry] : [];
+      // npm is `npm.cmd` on Windows, which spawn() will neither find by
+      // bare name nor launch without a shell. resolveSpawnTarget does
+      // both, and is identity everywhere else. Resolved outside the try
+      // so the error handler below can report what was attempted.
+      const target = resolveSpawnTarget("npm", [
+        "install",
+        "--no-audit",
+        "--no-fund",
+        "--silent",
+        ...registryArgs,
+        args.packageSpec,
+      ]);
       let child;
       try {
-        child = spawn(
-          "npm",
-          [
-            "install",
-            "--no-audit",
-            "--no-fund",
-            "--silent",
-            ...registryArgs,
-            args.packageSpec,
-          ],
-          { cwd: args.cwd, stdio: ["ignore", "pipe", "pipe"] },
-        );
+        child = spawn(target.command, target.args, {
+          cwd: args.cwd,
+          stdio: ["ignore", "pipe", "pipe"],
+          shell: target.shell,
+          windowsHide: true,
+        });
       } catch (err) {
         reject(err);
         return;
@@ -238,9 +246,25 @@ async function runNpmInstallOnce(
       child.on("error", (err) => {
         const e = err as NodeJS.ErrnoException;
         if (e.code === "ENOENT") {
+          // Name what was actually attempted. The bare form of this
+          // message is what issue #8 saw on Windows with npm plainly
+          // installed: spawn does not apply PATHEXT, so "not found"
+          // really meant "npm.cmd was never looked for" while the text
+          // argued the opposite.
+          const searched = (
+            process.env["PATH"] ??
+            process.env["Path"] ??
+            ""
+          )
+            .split(pathDelimiter)
+            .filter((entry) => entry.length > 0);
           reject(
             new Error(
-              `npm not found on PATH (install Node.js / npm, or use a binary-distributed agent)`,
+              `npm not found on PATH: tried to run ${JSON.stringify(
+                target.command,
+              )}${target.shell ? " through a shell" : ""} against ` +
+                `${searched.length} PATH entries. Install Node.js / npm, ` +
+                `or use a binary-distributed agent.`,
             ),
           );
           return;

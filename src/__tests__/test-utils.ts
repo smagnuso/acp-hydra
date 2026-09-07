@@ -1,5 +1,7 @@
 import * as fs from "node:fs/promises";
-import { vi } from "vitest";
+import * as net from "node:net";
+import * as path from "node:path";
+import { expect, vi } from "vitest";
 import type { MessageStream } from "../acp/framing.js";
 import type { JsonRpcMessage } from "../acp/types.js";
 import type { AgentInstance } from "../core/agent-instance.js";
@@ -8,6 +10,82 @@ import type {
   NotificationHandler,
 } from "../acp/connection.js";
 import { JsonRpcConnection } from "../acp/connection.js";
+
+// Put a fake command on PATH that runs a Node script.
+//
+// The bodies these fakes need (make a directory, drop a file, write to
+// stderr, pick an exit code) have no portable shell spelling: a
+// `#!/bin/sh` script is not executable on Windows at all, and CMD's
+// equivalents diverge enough that maintaining two dialects is worse
+// than maintaining none. Node is already present, so the body is JS and
+// the platform difference collapses to how it gets invoked.
+//
+// On Windows that means a `.cmd` shim, because a `.cmd`/`.exe` is the
+// only thing CreateProcess can launch and the extensionless file npm
+// itself lays down there is a POSIX sh script (see windows-command.ts).
+export async function writeFakeCommand(
+  dir: string,
+  name: string,
+  jsBody: string,
+): Promise<void> {
+  const scriptPath = path.join(dir, `${name}.mjs`);
+  await fs.writeFile(scriptPath, jsBody, "utf8");
+  if (process.platform === "win32") {
+    // process.execPath, not a bare `node`: callers sandbox PATH down to
+    // the fake's own directory, so a bare name has nothing to resolve
+    // against and the shim exits 1 before running anything. Same reason
+    // the POSIX branch below spells it out.
+    await fs.writeFile(
+      path.join(dir, `${name}.cmd`),
+      `@echo off\r\n"${process.execPath}" "%~dp0${name}.mjs" %*\r\n`,
+      "utf8",
+    );
+    return;
+  }
+  await writeExecutable(
+    path.join(dir, name),
+    `#!/bin/sh\nexec "${process.execPath}" "${scriptPath}" "$@"\n`,
+  );
+}
+
+// A port that can actually be bound, chosen by the OS.
+//
+// A random number in the dynamic range is not safe on Windows:
+// WinNAT/Hyper-V reserve blocks inside 49152-65535, and binding one of
+// those fails with EACCES (permission denied) rather than EADDRINUSE, so
+// a test picking blind fails intermittently for a reason that looks
+// nothing like a port conflict. Asking for port 0 never yields a
+// reserved port. The probe listener is closed before the caller binds,
+// which leaves a small race, but a far smaller one than guessing.
+export function pickFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.on("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const addr = probe.address();
+      if (addr === null || typeof addr === "string") {
+        probe.close(() => reject(new Error("no port was assigned")));
+        return;
+      }
+      const { port } = addr;
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
+// Assert a file carries owner-only permissions.
+//
+// A no-op on Windows, which derives file access from ACLs. Node's chmod
+// there only toggles the read-only bit, so the mode always reads back
+// 0o666 and there is nothing meaningful to assert. The exposure is real
+// but cannot be closed by chmod; see the Windows note in README's
+// security section.
+export function expectOwnerOnlyMode(mode: number): void {
+  if (process.platform === "win32") {
+    return;
+  }
+  expect(mode & 0o777).toBe(0o600);
+}
 
 // Write an executable script to disk in a way that minimizes the
 // window for execve's ETXTBSY race on Linux. The kernel briefly

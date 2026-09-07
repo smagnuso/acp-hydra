@@ -20,7 +20,7 @@ import {
 import { paths } from "./paths.js";
 import { currentPlatformKey } from "./binary-install.js";
 import type { HydraConfig } from "./config.js";
-import { writeExecutable } from "../__tests__/test-utils.js";
+import { writeFakeCommand } from "../__tests__/test-utils.js";
 
 const FIXTURE: { agents: RegistryAgent[] } = {
   agents: [
@@ -432,16 +432,26 @@ describe("planSpawn", () => {
     const sandbox = await fs.mkdtemp(
       path.join(process.env.HYDRA_ACP_HOME!, "planspawn-npm-"),
     );
-    const fakeNpm = path.join(sandbox, "npm");
-    // Restore /bin:/usr/bin so mkdir/touch/chmod resolve inside the
-    // script even though the outer PATH is scoped to the sandbox.
-    await writeExecutable(
-      fakeNpm,
-      "#!/bin/sh\nexport PATH=/bin:/usr/bin\nmkdir -p node_modules/.bin\ntouch node_modules/.bin/planspawn-npm-bin\nchmod +x node_modules/.bin/planspawn-npm-bin\nexit 0\n",
+    // A Node body behind a platform-appropriate shim: a #!/bin/sh script
+    // is not executable on Windows at all, so the fake was invisible and
+    // planSpawn reported npm missing. See writeFakeCommand.
+    await writeFakeCommand(
+      sandbox,
+      "npm",
+      `import { mkdirSync, writeFileSync } from "node:fs";
+mkdirSync("node_modules/.bin", { recursive: true });
+writeFileSync("node_modules/.bin/planspawn-npm-bin", "", { mode: 0o755 });
+`,
     );
     const originalPath = process.env.PATH;
     const originalSkip = process.env.HYDRA_ACP_SKIP_NPM_PREFETCH;
-    process.env.PATH = sandbox;
+    // Keep System32 on Windows: spawning a .cmd goes through a shell and
+    // Node falls back to a bare "cmd.exe" that PATH has to resolve. It
+    // contains no npm, so the sandbox still proves what it means to.
+    process.env.PATH =
+      process.platform === "win32"
+        ? [sandbox, path.join(process.env.SystemRoot ?? "C:\\Windows", "System32")].join(path.delimiter)
+        : sandbox;
     delete process.env.HYDRA_ACP_SKIP_NPM_PREFETCH;
     try {
       const agent: RegistryAgent = {

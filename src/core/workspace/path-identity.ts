@@ -27,6 +27,8 @@
 //      rewrite cannot express (why .git is a file, why submodules are
 //      empty, prefer repo-relative paths).
 
+import * as path from "node:path";
+
 /** Escape a string for literal use inside a RegExp. */
 function escapeRegExp(literal: string): string {
   return literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -180,15 +182,39 @@ export function isSourceTreeBreach(
   sourceCwd: string,
   workspacePath: string,
 ): boolean {
-  if (editedPath.length === 0 || !editedPath.startsWith("/")) {
+  // Only absolute paths can name a tree; a repo-relative path is
+  // identical in both and carries no claim about which one it means.
+  // path.isAbsolute rather than a leading "/" so `C:\...` counts, which
+  // is the difference between this check working on Windows and
+  // silently passing everything.
+  if (editedPath.length === 0 || !path.isAbsolute(editedPath)) {
     return false;
   }
-  const src = sourceCwd.endsWith("/") ? sourceCwd : `${sourceCwd}/`;
-  const ws = workspacePath.endsWith("/") ? workspacePath : `${workspacePath}/`;
   // A workspace nested inside the source tree would make every workspace
   // write look like a breach, so the workspace check wins.
-  if (editedPath.startsWith(ws)) {
+  if (isWithin(editedPath, workspacePath)) {
     return false;
   }
-  return editedPath.startsWith(src);
+  return isWithin(editedPath, sourceCwd);
+}
+
+/**
+ * Strict containment: `child` is under `parent`, and not `parent` itself.
+ *
+ * Exported because the alternative is what the stale-write check used to
+ * do: `child.startsWith(`${parent}/`)`, which is a containment test that
+ * only works on POSIX and silently answers "no" to everything on
+ * Windows.
+ *
+ * Known limit: this compares spellings, not inodes. A `parent` reached
+ * through a symlink and a `child` already resolved through it will not
+ * match. Canonicalizing here would mean filesystem I/O on a per-edit
+ * path, so the fix belongs at workspace-record creation instead.
+ */
+export function isWithin(child: string, parent: string): boolean {
+  const rel = path.relative(path.resolve(parent), path.resolve(child));
+  if (rel.length === 0 || rel.startsWith("..") || path.isAbsolute(rel)) {
+    return false;
+  }
+  return true;
 }

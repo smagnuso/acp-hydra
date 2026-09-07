@@ -9,6 +9,10 @@ import type { HydraConfig } from "../core/config.js";
 import { SessionStore } from "../core/session-store.js";
 import { HYDRA_CAT_CLIENT_NAME } from "../core/hydra-version.js";
 
+// Not exported from test-utils: vitest's `it` has a type that cannot be
+// named across a module boundary (TS4023), and this is the only user.
+const itNotOnWindows = process.platform === "win32" ? it.skip : it;
+
 const TEST_TOKEN = "hydra_token_0123456789abcdef0123456789abcdef";
 
 function testConfig(): HydraConfig {
@@ -1375,7 +1379,10 @@ describe("startDaemon", () => {
       await expect(fs.access(pidPath)).rejects.toThrow();
     });
 
-    it("rotates logs into daemon.<N>.log files with a current.log symlink", async () => {
+    // Windows has no symlink here: pino-roll creates it synchronously and
+    // that needs Developer Mode or admin, so rolling-log.ts turns the
+    // option off there and readers fall back to the newest numbered file.
+    itNotOnWindows("rotates logs into daemon.<N>.log files with a current.log symlink", async () => {
       handle!.app.log.warn("test-marker-line");
 
       await handle!.shutdown();
