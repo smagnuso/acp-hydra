@@ -7,6 +7,7 @@ import { PeerStore } from "../core/peer-store.js";
 import type { ForeignSessionCache } from "./routes/session-forward.js";
 import {
   ForeignSessionRegistry,
+  isForwardableMethod,
   wrapStreamForForwarding,
   type Dialer,
   type ForwardTarget,
@@ -363,6 +364,97 @@ describe("ForeignSessionRegistry", () => {
       target,
     );
     expect(cancel).toMatchObject({ jsonrpc: "2.0", id: 3, result: {} });
+  });
+
+  it("forwards the newly-added in-session methods through the same generic branch", async () => {
+    const peer = buildFakePeer();
+    withEchoAttach(peer);
+    const seen: Array<{ method: string; sessionId: string }> = [];
+    peer.onEachServer((server) => {
+      for (const method of [
+        "session/close",
+        "session/delete",
+        "hydra-acp/session/delete",
+        "session/set_model",
+        "session/set_mode",
+        "session/set_config_option",
+        "_session/steering",
+        "hydra-acp/prompt/cancel",
+        "hydra-acp/prompt/update",
+        "hydra-acp/prompt/amend",
+        "hydra-acp/session/tool_content",
+        "hydra-acp/session/force_cancel",
+      ]) {
+        server.onRequest(method, async (raw) => {
+          seen.push({ method, sessionId: (raw as { sessionId: string }).sessionId });
+          return { ok: true };
+        });
+      }
+    });
+    const registry = new ForeignSessionRegistry(store, peer.dial);
+    const { target } = localTarget("local_1");
+    await registry.handleLocalMessage(
+      { jsonrpc: "2.0", id: 1, method: "session/attach", params: { sessionId: "peerb:abc" } },
+      "peerb:abc",
+      target,
+    );
+    let nextId = 2;
+    for (const method of [
+      "session/close",
+      "session/delete",
+      "hydra-acp/session/delete",
+      "session/set_model",
+      "session/set_mode",
+      "session/set_config_option",
+      "_session/steering",
+      "hydra-acp/prompt/cancel",
+      "hydra-acp/prompt/update",
+      "hydra-acp/prompt/amend",
+      "hydra-acp/session/tool_content",
+      "hydra-acp/session/force_cancel",
+    ]) {
+      const res = await registry.handleLocalMessage(
+        { jsonrpc: "2.0", id: nextId, method, params: { sessionId: "peerb:abc" } },
+        "peerb:abc",
+        target,
+      );
+      expect(res).toMatchObject({ jsonrpc: "2.0", id: nextId, result: { ok: true } });
+      nextId++;
+    }
+    // The peer always sees its own unwrapped local id, never "peerb:".
+    expect(seen.every((s) => s.sessionId === "abc")).toBe(true);
+    expect(seen.map((s) => s.method).sort()).toEqual(
+      [
+        "session/close",
+        "session/delete",
+        "hydra-acp/session/delete",
+        "session/set_model",
+        "session/set_mode",
+        "session/set_config_option",
+        "_session/steering",
+        "hydra-acp/prompt/cancel",
+        "hydra-acp/prompt/update",
+        "hydra-acp/prompt/amend",
+        "hydra-acp/session/tool_content",
+        "hydra-acp/session/force_cancel",
+      ].sort(),
+    );
+  });
+
+  it("does not treat transformer-gated or attach-shaped methods as forwardable", () => {
+    // hydra-acp/attention/{set,clear}: registered only for
+    // transformer-kind connections in acp-ws.ts; forwarding would let
+    // any caller reach them on a federated session via this daemon's
+    // own peer credential, bypassing that local gate.
+    expect(isForwardableMethod("hydra-acp/attention/set")).toBe(false);
+    expect(isForwardableMethod("hydra-acp/attention/clear")).toBe(false);
+    // session/fork, session/resume, session/load: bind a *new* local
+    // attachment and return a sessionId that becomes the addressing
+    // target for everything after it — the generic forward branch
+    // doesn't rewrap that id or register it in `attachments`.
+    expect(isForwardableMethod("session/fork")).toBe(false);
+    expect(isForwardableMethod("session/resume")).toBe(false);
+    expect(isForwardableMethod("session/load")).toBe(false);
   });
 
   it("session/prompt to a session that was never attached returns SessionNotFound", async () => {

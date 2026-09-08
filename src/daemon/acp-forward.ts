@@ -1,8 +1,12 @@
-// Forwards ACP session/{attach,detach,prompt,cancel} traffic for a
-// foreign ("name:localId") session to the federated peer that owns
-// it, and relays session/update pushes, hydra-acp/session/closed, and
-// permission requests back. See core/foreign-session-id.ts and
-// PROTOCOL.md's "Federated session ids" note.
+// Forwards ACP traffic for a foreign ("name:localId") session to the
+// federated peer that owns it — session/attach, /detach, /prompt,
+// /cancel, plus every other in-session method that operates on an
+// existing sessionId and returns a plain result (see the
+// FORWARDABLE_METHODS doc comment for the full set and what's
+// deliberately excluded) — and relays session/update pushes,
+// hydra-acp/session/closed, and permission requests back. See
+// core/foreign-session-id.ts and PROTOCOL.md's "Federated session ids"
+// note.
 //
 // Unlike the REST forwarding hook (one request in, one response out),
 // a WS attach is a standing relationship: the peer keeps pushing
@@ -65,11 +69,47 @@ interface Attachment {
 // Injectable so tests can wire a fake peer without a real socket.
 export type Dialer = (record: PeerRecord) => Promise<JsonRpcConnection>;
 
+// Every method here reaches a federated session through the same
+// generic branch of handleLocalMessage as session/prompt always has:
+// dispatch by msg.method, forward upstreamParams verbatim, relay the
+// result back unmodified. Safe to add a method to this set exactly
+// when its *local* handler does the same shape of thing — operate on
+// an existing sessionId and return a plain result — because bypassing
+// that local handler entirely (which is what forwarding does) then
+// loses nothing. Two shapes must NOT be added here without bespoke
+// handling first:
+//   - "Attach-shaped" methods (session/fork, session/resume,
+//     session/load) bind a *new* local attachment and return a
+//     sessionId that becomes the addressing target for everything
+//     after it — the generic branch neither rewraps that id into
+//     "name:localId" form nor registers it in `attachments`, so a
+//     naive add would hand the client an unaddressable id and silently
+//     break every follow-up call against it, same failure shape as the
+//     original bare-id bug this file's local-miss fallback fixes.
+//   - Methods gated to transformer-kind connections at registration
+//     time (hydra-acp/attention/{set,clear} — see
+//     TRANSFORMER_ONLY_HYDRA_ACP_METHODS in acp-ws.ts) must stay out:
+//     this wrapper intercepts before that local processIdentity gate
+//     ever runs, so forwarding would let any caller reach a
+//     transformer-only method on a federated session using this
+//     daemon's own (more privileged) peer credential.
 const FORWARDABLE_METHODS = new Set([
   "session/attach",
   "session/detach",
   "session/prompt",
   "session/cancel",
+  "session/close",
+  "session/delete",
+  "hydra-acp/session/delete",
+  "session/set_model",
+  "session/set_mode",
+  "session/set_config_option",
+  "_session/steering",
+  "hydra-acp/prompt/cancel",
+  "hydra-acp/prompt/update",
+  "hydra-acp/prompt/amend",
+  "hydra-acp/session/tool_content",
+  "hydra-acp/session/force_cancel",
 ]);
 
 export function isForwardableMethod(method: string): boolean {
@@ -325,8 +365,9 @@ export class ForeignSessionRegistry {
       return isRequest ? { jsonrpc: "2.0", id: id!, result: result ?? {} } : undefined;
     }
 
-    // session/prompt, session/cancel — the only other forwardable
-    // methods (see isForwardableMethod).
+    // Every other forwardable method (see FORWARDABLE_METHODS) lands
+    // here: dispatch by name, forward params verbatim, relay the
+    // result back unmodified.
     if (isRequest) {
       try {
         const result = await attachment.peerConnection.request(msg.method, upstreamParams);
