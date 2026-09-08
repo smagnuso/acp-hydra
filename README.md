@@ -411,6 +411,15 @@ hydra-acp agent log <id> [-f] [-n N]       # tail or follow an agent's spawn/std
 hydra-acp registry pin | unpin             # freeze the daemon on its cached registry, or
                                            # resume normal TTL fetching
 
+hydra-acp remote add <name> <host[:port]> [--label <text>]
+                                           # federate with a peer daemon under a local name
+                                           # (prompts for its password; matches `git remote add`).
+                                           # TOFU-pins the peer's TLS cert on first trust; re-running
+                                           # this before the token expires refreshes it without
+                                           # re-prompting for the cert
+hydra-acp remote [list]                    # list federated peer daemons
+hydra-acp remote remove <name>             # un-federate a peer daemon and revoke its token
+
 hydra-acp config [list] [<dotted.key>]     # print effective config (or one subtree) as JSON
 hydra-acp config get <dotted.key>          # print one effective value (e.g. tui.mouse)
 hydra-acp config set <dotted.key> <value>  # persist a value, validated against the schema
