@@ -254,4 +254,67 @@ describe("ForeignSessionCache", () => {
     const [entry] = cache.list({ includeNonInteractive: true });
     expect(entry).toMatchObject({ sessionId: "foo:dormant", remote: "foo" });
   });
+
+  describe("findByLocalId", () => {
+    it("matches a peer's raw id given verbatim", async () => {
+      const store = await storeWithPeer("foo");
+      cache = new ForeignSessionCache(store, {
+        fetchImpl: fakeFetch([
+          { sessionId: "hydra_session_abc", interactive: true, status: "cold" },
+        ]),
+      });
+      await cache.refreshNow();
+      expect(cache.findByLocalId("hydra_session_abc")).toEqual([
+        { name: "foo", localId: "hydra_session_abc" },
+      ]);
+    });
+
+    it("also matches the hydra_session_-stripped display form (regression: sessions list's SESSION column strips it)", async () => {
+      const store = await storeWithPeer("foo");
+      cache = new ForeignSessionCache(store, {
+        fetchImpl: fakeFetch([
+          { sessionId: "hydra_session_abc", interactive: true, status: "cold" },
+        ]),
+      });
+      await cache.refreshNow();
+      expect(cache.findByLocalId("abc")).toEqual([
+        { name: "foo", localId: "hydra_session_abc" },
+      ]);
+    });
+
+    it("returns no matches for an id nobody has", async () => {
+      const store = await storeWithPeer("foo");
+      cache = new ForeignSessionCache(store, { fetchImpl: fakeFetch([]) });
+      await cache.refreshNow();
+      expect(cache.findByLocalId("nope")).toEqual([]);
+    });
+
+    it("reports every peer that matches, for the ambiguous case", async () => {
+      const storeA = await PeerStore.load();
+      await storeA.set({
+        name: "foo",
+        host: "foo.example.com",
+        port: 55514,
+        token: "tok",
+        expiresAt: future(),
+        addedAt: new Date().toISOString(),
+      });
+      await storeA.set({
+        name: "bar",
+        host: "bar.example.com",
+        port: 55514,
+        token: "tok",
+        expiresAt: future(),
+        addedAt: new Date().toISOString(),
+      });
+      cache = new ForeignSessionCache(storeA, {
+        fetchImpl: fakeFetch([
+          { sessionId: "hydra_session_abc", interactive: true, status: "cold" },
+        ]),
+      });
+      await cache.refreshNow();
+      const matches = cache.findByLocalId("abc");
+      expect(matches.map((m) => m.name).sort()).toEqual(["bar", "foo"]);
+    });
+  });
 });

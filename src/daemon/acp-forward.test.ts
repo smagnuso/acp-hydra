@@ -4,11 +4,20 @@ import type { MessageStream } from "../acp/framing.js";
 import { JsonRpcErrorCodes, type JsonRpcMessage } from "../acp/types.js";
 import { makeControlledStream, type ControlledStream } from "../__tests__/test-utils.js";
 import { PeerStore } from "../core/peer-store.js";
+import type { ForeignSessionCache } from "./routes/session-forward.js";
 import {
   ForeignSessionRegistry,
+  wrapStreamForForwarding,
   type Dialer,
   type ForwardTarget,
 } from "./acp-forward.js";
+
+function fakeCache(byId: Record<string, string[]>): ForeignSessionCache {
+  return {
+    findByLocalId: (id: string) =>
+      (byId[id] ?? []).map((name) => ({ name, localId: id })),
+  } as unknown as ForeignSessionCache;
+}
 
 // In-memory duplex MessageStream pair — the fake "wire" for one
 // dial()'d connection between the registry and a fake peer server, and
@@ -619,5 +628,156 @@ describe("ForeignSessionRegistry", () => {
       t2,
     );
     expect(promptForT2).toMatchObject({ jsonrpc: "2.0", id: 3, result: { stopReason: "end_turn" } });
+  });
+
+  describe("resolveLocalMiss", () => {
+    it("returns not-ok with no localMiss configured", async () => {
+      const registry = new ForeignSessionRegistry(store);
+      await expect(registry.resolveLocalMiss("abc")).resolves.toEqual({ ok: false });
+    });
+
+    it("returns not-ok when the id resolves locally, without consulting the cache", async () => {
+      let cacheConsulted = false;
+      const registry = new ForeignSessionRegistry(store, undefined, {
+        resolvesLocally: async () => true,
+        cache: {
+          findByLocalId: () => {
+            cacheConsulted = true;
+            return ["peerb"];
+          },
+        } as unknown as ForeignSessionCache,
+      });
+      await expect(registry.resolveLocalMiss("abc")).resolves.toEqual({ ok: false });
+      expect(cacheConsulted).toBe(false);
+    });
+
+    it("returns not-ok when no peer has the id either", async () => {
+      const registry = new ForeignSessionRegistry(store, undefined, {
+        resolvesLocally: async () => false,
+        cache: fakeCache({}),
+      });
+      await expect(registry.resolveLocalMiss("abc")).resolves.toEqual({ ok: false });
+    });
+
+    it("resolves to the federated id when exactly one peer has it", async () => {
+      const registry = new ForeignSessionRegistry(store, undefined, {
+        resolvesLocally: async () => false,
+        cache: fakeCache({ abc: ["peerb"] }),
+      });
+      await expect(registry.resolveLocalMiss("abc")).resolves.toEqual({
+        ok: true,
+        foreignId: "peerb:abc",
+      });
+    });
+
+    it("returns the ambiguous remote list when more than one peer has the id", async () => {
+      const registry = new ForeignSessionRegistry(store, undefined, {
+        resolvesLocally: async () => false,
+        cache: fakeCache({ abc: ["peerb", "peerc"] }),
+      });
+      await expect(registry.resolveLocalMiss("abc")).resolves.toEqual({
+        ok: false,
+        ambiguous: ["peerb", "peerc"],
+      });
+    });
+  });
+
+  // Mirrors the real wiring in acp-ws.ts: a raw client stream, wrapped
+  // by wrapStreamForForwarding, with the *wrapped* stream (not the raw
+  // one) underneath the client's own JsonRpcConnection — so a message
+  // the wrapper doesn't intercept still reaches that connection's own
+  // request dispatch (and its automatic MethodNotFound for anything
+  // unhandled), exactly as it would in production.
+  function buildWrappedClient(
+    registry: ForeignSessionRegistry,
+    clientId = "local_1",
+  ): { raw: ControlledStream; connection: JsonRpcConnection } {
+    const raw = makeControlledStream();
+    const targetBox: { connection?: JsonRpcConnection } = {};
+    const wrapped = wrapStreamForForwarding(raw, registry, targetBox, clientId);
+    const connection = new JsonRpcConnection(wrapped);
+    targetBox.connection = connection;
+    return { raw, connection };
+  }
+
+  describe("wrapStreamForForwarding — bare-id local-miss fallback", () => {
+    it("forwards session/attach for a bare id resolved via the local-miss fallback", async () => {
+      const peer = buildFakePeer();
+      withEchoAttach(peer);
+      const registry = new ForeignSessionRegistry(store, peer.dial, {
+        resolvesLocally: async () => false,
+        cache: fakeCache({ abc: ["peerb"] }),
+      });
+      const { raw } = buildWrappedClient(registry);
+
+      raw.emitMessage({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "session/attach",
+        params: { sessionId: "abc" },
+      });
+      await new Promise((r) => setTimeout(r, 0));
+
+      // Forwarded to the peer, not the local connection's own dispatch
+      // (which has no session/attach handler registered here, so a
+      // fallthrough would show up as MethodNotFound instead).
+      expect(raw.sent).toMatchObject([
+        { jsonrpc: "2.0", id: 1, result: { sessionId: "peerb:abc" } },
+      ]);
+    });
+
+    it("falls through to the local handler for a bare id no peer has", async () => {
+      const registry = new ForeignSessionRegistry(store, undefined, {
+        resolvesLocally: async () => false,
+        cache: fakeCache({}),
+      });
+      const { raw, connection } = buildWrappedClient(registry);
+      const localAttachIds: unknown[] = [];
+      connection.onRequest("session/attach", async (params) => {
+        localAttachIds.push((params as { sessionId: string }).sessionId);
+        return { sessionId: "abc" };
+      });
+
+      raw.emitMessage({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "session/attach",
+        params: { sessionId: "abc" },
+      });
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(localAttachIds).toEqual(["abc"]);
+      expect(raw.sent).toMatchObject([{ jsonrpc: "2.0", id: 1, result: { sessionId: "abc" } }]);
+    });
+
+    it("errors instead of forwarding when the bare id is ambiguous across peers", async () => {
+      const registry = new ForeignSessionRegistry(store, undefined, {
+        resolvesLocally: async () => false,
+        cache: fakeCache({ abc: ["peerb", "peerc"] }),
+      });
+      const { raw, connection } = buildWrappedClient(registry);
+      const localAttachIds: unknown[] = [];
+      connection.onRequest("session/attach", async (params) => {
+        localAttachIds.push((params as { sessionId: string }).sessionId);
+        return { sessionId: "abc" };
+      });
+
+      raw.emitMessage({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "session/attach",
+        params: { sessionId: "abc" },
+      });
+      await new Promise((r) => setTimeout(r, 0));
+
+      // Not forwarded, and not passed to the local handler either —
+      // ambiguity is answered directly.
+      expect(localAttachIds).toEqual([]);
+      expect(raw.sent).toMatchObject([
+        { jsonrpc: "2.0", id: 1, error: { code: JsonRpcErrorCodes.SessionNotFound } },
+      ]);
+      const [sent] = raw.sent as Array<{ error: { message: string } }>;
+      expect(sent!.error.message).toMatch(/more than one remote/);
+    });
   });
 });

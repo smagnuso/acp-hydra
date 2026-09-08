@@ -26,11 +26,24 @@ import {
   formatForeignSessionId,
   parseForeignSessionId,
 } from "../../core/foreign-session-id.js";
+import { HYDRA_SESSION_PREFIX } from "../../core/session.js";
 import type { PeerStore } from "../../core/peer-store.js";
 
 export interface SessionForwardDeps {
   store: PeerStore;
   fetchImpl?: typeof fetch;
+  // Local-miss fallback: when a bare (non-foreign) id doesn't resolve
+  // locally, check whether exactly one known peer has a session under
+  // that same raw id via the already-warm ForeignSessionCache (no
+  // network call — see findByLocalId) and, if so, forward there as if
+  // the caller had typed "<name>:<id>". Optional so callers/tests that
+  // don't need this path (or haven't wired a cache/manager yet) can
+  // omit it; every normal, locally-resolvable request is unaffected
+  // either way, since this only runs after resolvesLocally says no.
+  localMiss?: {
+    resolvesLocally: (id: string) => Promise<boolean>;
+    cache: ForeignSessionCache;
+  };
 }
 
 // Routes that can stay open indefinitely (?follow=1) rather than
@@ -58,9 +71,29 @@ export function registerSessionForwardHook(
     if (typeof id !== "string") {
       return;
     }
-    const foreign = parseForeignSessionId(id);
+    let foreign = parseForeignSessionId(id);
     if (!foreign) {
-      return; // Not name-prefixed — handle locally, as always.
+      // Not name-prefixed. Try locally first, as always — the fallback
+      // below only ever runs after a confirmed local miss, so it adds
+      // no cost to the overwhelming majority of requests, which resolve
+      // locally and return here untouched.
+      if (!deps.localMiss) {
+        return;
+      }
+      if (await deps.localMiss.resolvesLocally(id)) {
+        return;
+      }
+      const matches = deps.localMiss.cache.findByLocalId(id);
+      if (matches.length === 0) {
+        return; // Nobody has it — fall through to the normal local 404.
+      }
+      if (matches.length > 1) {
+        reply.code(404).send({
+          error: `Session "${id}" exists on more than one remote (${matches.map((m) => m.name).join(", ")}). Address it as "<remote>:${id}".`,
+        });
+        return;
+      }
+      foreign = matches[0]!;
     }
     const peer = deps.store.get(foreign.name);
     if (!peer) {
@@ -312,6 +345,42 @@ export class ForeignSessionCache {
       }
       return true;
     });
+  }
+
+  // Reverse lookup for the "bare id, local miss" fallback: which
+  // peers (if any) have a session whose *own* raw id is `rawId`, and
+  // under which exact local id (see below for why that can differ from
+  // `rawId` itself). Pure in-memory map scan against the already-warm
+  // cache — no network call, so this costs nothing beyond the
+  // local-miss check that gates it (see registerSessionForwardHook /
+  // acp-forward.ts). The caller decides between "no match" (fall
+  // through to the normal 404), "one match" (forward there), and
+  // "ambiguous" (practically unreachable given the id alphabet's size,
+  // but still a defined outcome).
+  //
+  // `rawId` is usually what a user typed or copied from `sessions
+  // list`'s SESSION column, which — like `resolveCanonicalId` already
+  // has to account for locally — has had the internal
+  // `hydra_session_` prefix stripped for display (see
+  // stripHydraSessionPrefix). A federated peer's own ids carry that
+  // same prefix, so a lookup for the bare form alone would silently
+  // miss every match; try both forms exactly as resolveCanonicalId
+  // does, and report back whichever one actually matched so the
+  // caller forwards with the peer's real id, not the display form.
+  findByLocalId(rawId: string): Array<{ name: string; localId: string }> {
+    const candidates = rawId.startsWith(HYDRA_SESSION_PREFIX)
+      ? [rawId]
+      : [rawId, HYDRA_SESSION_PREFIX + rawId];
+    const matches: Array<{ name: string; localId: string }> = [];
+    for (const [name, state] of this.perPeer) {
+      for (const localId of candidates) {
+        if (state.sessions.has(formatForeignSessionId({ name, localId }))) {
+          matches.push({ name, localId });
+          break;
+        }
+      }
+    }
+    return matches;
   }
 }
 

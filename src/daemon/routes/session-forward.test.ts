@@ -37,7 +37,10 @@ interface Node {
   foreignSessionCache?: ForeignSessionCache;
 }
 
-async function buildNode(peerStore?: PeerStore): Promise<Node> {
+async function buildNode(
+  peerStore?: PeerStore,
+  opts: { withLocalMiss?: boolean } = {},
+): Promise<Node> {
   const mocks: MockAgentControls[] = [];
   const manager = new SessionManager(
     fakeRegistry([fakeRegistryAgent("claude-code")]),
@@ -62,7 +65,18 @@ async function buildNode(peerStore?: PeerStore): Promise<Node> {
     foreignSessionCache,
   );
   if (peerStore) {
-    registerSessionForwardHook(app, { store: peerStore });
+    registerSessionForwardHook(app, {
+      store: peerStore,
+      ...(opts.withLocalMiss
+        ? {
+            localMiss: {
+              resolvesLocally: async (id) =>
+                (await manager.resolveCanonicalId(id)) !== undefined,
+              cache: foreignSessionCache!,
+            },
+          }
+        : {}),
+    });
   }
   await app.listen({ host: "127.0.0.1", port: 0 });
   const addr = app.server.address() as AddressInfo;
@@ -279,5 +293,116 @@ describe("session forwarding", () => {
     const body = (await res.json()) as { sessionId: string };
     expect(body.sessionId).not.toContain(":");
     expect(a.manager.get(body.sessionId)).toBeDefined();
+  });
+});
+
+describe("session forwarding — local-miss fallback", () => {
+  let a: Node;
+  let b: Node;
+  let peerStore: PeerStore;
+
+  beforeEach(async () => {
+    b = await buildNode();
+    peerStore = await PeerStore.load();
+    await peerStore.set({
+      name: "peerb",
+      host: "127.0.0.1",
+      port: b.port,
+      token: "test-token",
+      expiresAt: future(),
+      addedAt: new Date().toISOString(),
+    });
+    a = await buildNode(peerStore, { withLocalMiss: true });
+  });
+
+  afterEach(async () => {
+    await a.manager.closeAll().catch(() => undefined);
+    await b.manager.closeAll().catch(() => undefined);
+    await a.app.close();
+    await b.app.close();
+  });
+
+  it("forwards a bare id that misses locally but matches exactly one peer", async () => {
+    const session = await b.manager.create({ cwd: "/w", agentId: "claude-code" });
+    await a.foreignSessionCache!.refreshNow();
+
+    const res = await fetch(`${a.baseUrl}/v1/sessions/${session.sessionId}`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { sessionId: string };
+    expect(body.sessionId).toBe(session.sessionId);
+  });
+
+  it("forwards the prefix-stripped display form of a peer's id (regression: sessions list's SESSION column strips hydra_session_)", async () => {
+    const session = await b.manager.create({ cwd: "/w", agentId: "claude-code" });
+    await a.foreignSessionCache!.refreshNow();
+
+    const stripped = session.sessionId.replace(/^hydra_session_/, "");
+    expect(stripped).not.toBe(session.sessionId);
+    const res = await fetch(`${a.baseUrl}/v1/sessions/${stripped}`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { sessionId: string };
+    expect(body.sessionId).toBe(session.sessionId);
+  });
+
+  it("still 404s a bare id that no peer has either", async () => {
+    const res = await fetch(`${a.baseUrl}/v1/sessions/not-anywhere`);
+    expect(res.status).toBe(404);
+  });
+
+  it("still resolves a locally-created session normally with the fallback wired up", async () => {
+    const local = await a.manager.create({ cwd: "/w", agentId: "claude-code" });
+    const res = await fetch(`${a.baseUrl}/v1/sessions/${local.sessionId}`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { sessionId: string };
+    expect(body.sessionId).toBe(local.sessionId);
+  });
+
+  it("errors naming every remote when the bare id is ambiguous across peers", async () => {
+    const c = await buildNode();
+    try {
+      await peerStore.set({
+        name: "peerc",
+        host: "127.0.0.1",
+        port: c.port,
+        token: "test-token",
+        expiresAt: future(),
+        addedAt: new Date().toISOString(),
+      });
+      // Neither daemon can mint a duplicate id on demand, so fake the
+      // collision directly in each peer's cached entry — the point of
+      // this test is the >1-match branch in findByLocalId's caller,
+      // not the (practically unreachable) odds of a real collision.
+      const fakeId = "collidingId1234A";
+      const entry = {
+        sessionId: fakeId,
+        cwd: "/w",
+        attachedClients: 0,
+        updatedAt: new Date().toISOString(),
+        status: "cold" as const,
+        interactive: true,
+      };
+      (a.foreignSessionCache as unknown as {
+        perPeer: Map<string, { cursor: number | undefined; sessions: Map<string, unknown> }>;
+      }).perPeer.set("peerb", {
+        cursor: 1,
+        sessions: new Map([[`peerb:${fakeId}`, { ...entry, sessionId: `peerb:${fakeId}`, remote: "peerb" }]]),
+      });
+      (a.foreignSessionCache as unknown as {
+        perPeer: Map<string, { cursor: number | undefined; sessions: Map<string, unknown> }>;
+      }).perPeer.set("peerc", {
+        cursor: 1,
+        sessions: new Map([[`peerc:${fakeId}`, { ...entry, sessionId: `peerc:${fakeId}`, remote: "peerc" }]]),
+      });
+
+      const res = await fetch(`${a.baseUrl}/v1/sessions/${fakeId}`);
+      expect(res.status).toBe(404);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toMatch(/more than one remote/);
+      expect(body.error).toMatch(/peerb/);
+      expect(body.error).toMatch(/peerc/);
+    } finally {
+      await c.manager.closeAll().catch(() => undefined);
+      await c.app.close();
+    }
   });
 });

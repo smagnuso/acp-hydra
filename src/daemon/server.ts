@@ -163,7 +163,6 @@ export async function startDaemon(
   // pin is useless if the pinning dispatcher was never installed.
   installGlobalTlsTrust();
   loadPinsFromPeerStore(peerStore);
-  const foreignSessions = new ForeignSessionRegistry(peerStore);
   const peerHealth = new PeerHealthTracker(peerStore);
   peerHealth.start();
   const foreignSessionCache = new ForeignSessionCache(peerStore);
@@ -276,6 +275,11 @@ export async function startDaemon(
     defaultCwd: config.defaultCwd,
     disableWorkspaceSnapshots: config.disableWorkspaceSnapshots,
   });
+  const foreignSessions = new ForeignSessionRegistry(peerStore, undefined, {
+    resolvesLocally: async (id) =>
+      (await manager.resolveCanonicalId(id)) !== undefined,
+    cache: foreignSessionCache,
+  });
 
   const extensions = new ExtensionManager(extensionList(config), undefined, {
     tokenRegistry: processRegistry,
@@ -336,7 +340,14 @@ export async function startDaemon(
     peerStore,
     foreignSessionCache,
   );
-  registerSessionForwardHook(app, { store: peerStore });
+  registerSessionForwardHook(app, {
+    store: peerStore,
+    localMiss: {
+      resolvesLocally: async (id) =>
+        (await manager.resolveCanonicalId(id)) !== undefined,
+      cache: foreignSessionCache,
+    },
+  });
   registerAgentRoutes(app, registry, manager, { npmRegistry: config.npmRegistry });
   registerExtensionRoutes(app, extensions);
   registerTransformerRoutes(app, transformers);

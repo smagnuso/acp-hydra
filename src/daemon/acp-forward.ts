@@ -42,6 +42,7 @@ import {
   formatForeignSessionId,
 } from "../core/foreign-session-id.js";
 import type { PeerStore, PeerRecord } from "../core/peer-store.js";
+import type { ForeignSessionCache } from "./routes/session-forward.js";
 import type { MessageStream } from "../acp/framing.js";
 import {
   JsonRpcErrorCodes,
@@ -96,25 +97,63 @@ export function wrapStreamForForwarding(
   clientId: string,
 ): MessageStream {
   const handlers: Array<(m: JsonRpcMessage) => void> = [];
+  const passThrough = (msg: JsonRpcMessage): void => {
+    for (const h of handlers) {
+      h(msg);
+    }
+  };
+  const forward = (
+    msg: JsonRpcRequest | JsonRpcNotification,
+    foreignId: string,
+  ): void => {
+    void registry
+      .handleLocalMessage(msg, foreignId, {
+        connection: targetBox.connection!,
+        clientId,
+      })
+      .then((response) => (response ? inner.send(response) : undefined))
+      .catch(() => undefined);
+  };
   inner.onMessage((msg) => {
     if ("method" in msg && isForwardableMethod(msg.method)) {
       const params = msg.params as { sessionId?: unknown } | undefined;
       const sessionId =
         typeof params?.sessionId === "string" ? params.sessionId : undefined;
-      if (sessionId && parseForeignSessionId(sessionId)) {
-        void registry
-          .handleLocalMessage(msg as JsonRpcRequest | JsonRpcNotification, sessionId, {
-            connection: targetBox.connection!,
-            clientId,
-          })
-          .then((response) => (response ? inner.send(response) : undefined))
-          .catch(() => undefined);
-        return;
+      if (sessionId) {
+        if (parseForeignSessionId(sessionId)) {
+          forward(msg as JsonRpcRequest | JsonRpcNotification, sessionId);
+          return;
+        }
+        // Bare id, and only on session/attach: give the local-miss
+        // fallback a chance to resolve it to a federated session before
+        // falling through to the local handler's own not-found error.
+        // detach/prompt/cancel never need this — they only ever carry
+        // an id this daemon already rewrapped in a prior attach
+        // response (see ForeignSessionRegistry.resolveLocalMiss).
+        if (msg.method === "session/attach") {
+          const isRequest = "id" in msg;
+          void registry.resolveLocalMiss(sessionId).then((resolved) => {
+            if (resolved.ok) {
+              forward(msg as JsonRpcRequest | JsonRpcNotification, resolved.foreignId);
+              return;
+            }
+            if (resolved.ambiguous && isRequest) {
+              inner.send(
+                errorResponse(
+                  (msg as JsonRpcRequest).id,
+                  JsonRpcErrorCodes.SessionNotFound,
+                  `Session "${sessionId}" exists on more than one remote (${resolved.ambiguous.join(", ")}). Address it as "<remote>:${sessionId}".`,
+                ),
+              );
+              return;
+            }
+            passThrough(msg);
+          });
+          return;
+        }
       }
     }
-    for (const h of handlers) {
-      h(msg);
-    }
+    passThrough(msg);
   });
   return {
     send: (m) => inner.send(m),
@@ -137,7 +176,46 @@ export class ForeignSessionRegistry {
   constructor(
     private readonly store: PeerStore,
     private readonly dial: Dialer = defaultDialer,
+    // Local-miss fallback for a bare `session/attach` id — mirrors
+    // session-forward.ts's SessionForwardDeps.localMiss (see its doc
+    // comment): optional, and only ever consulted after a confirmed
+    // local miss, so it costs nothing on the normal path.
+    private readonly localMiss?: {
+      resolvesLocally: (id: string) => Promise<boolean>;
+      cache: ForeignSessionCache;
+    },
   ) {}
+
+  // Resolves a bare (non-foreign) id to a federated session id when
+  // exactly one known peer has a session under that same raw id. Pure
+  // in-memory (ForeignSessionCache scan), no network call. Only called
+  // from wrapStreamForForwarding, and only for session/attach — every
+  // other forwardable method is only ever reached with an id this
+  // daemon already rewrapped in a prior attach response.
+  async resolveLocalMiss(
+    id: string,
+  ): Promise<
+    | { ok: true; foreignId: string }
+    | { ok: false; ambiguous?: string[] }
+  > {
+    if (!this.localMiss) {
+      return { ok: false };
+    }
+    if (await this.localMiss.resolvesLocally(id)) {
+      return { ok: false };
+    }
+    const matches = this.localMiss.cache.findByLocalId(id);
+    if (matches.length === 0) {
+      return { ok: false };
+    }
+    if (matches.length > 1) {
+      return { ok: false, ambiguous: matches.map((m) => m.name) };
+    }
+    return {
+      ok: true,
+      foreignId: formatForeignSessionId(matches[0]!),
+    };
+  }
 
   // Handles one inbound request/notification from a local client whose
   // sessionId is foreign-shaped (see parseForeignSessionId). Returns
