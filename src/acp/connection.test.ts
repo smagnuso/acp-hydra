@@ -108,6 +108,39 @@ describe("JsonRpcConnection", () => {
     expect(handler).toHaveBeenCalledWith({ foo: 1 }, "update");
   });
 
+  it("onAnyNotification fires for every notification regardless of method name", () => {
+    const stream = makeControlledStream();
+    const conn = new JsonRpcConnection(stream);
+    const seen: Array<{ params: unknown; method: string }> = [];
+    conn.onAnyNotification((params, method) => {
+      seen.push({ params, method });
+    });
+
+    stream.emitMessage({ jsonrpc: "2.0", method: "session/update", params: { a: 1 } });
+    stream.emitMessage({ jsonrpc: "2.0", method: "hydra-acp/prompt_queue/added", params: { b: 2 } });
+    stream.emitMessage({ jsonrpc: "2.0", method: "some/unknown/method", params: { c: 3 } });
+
+    expect(seen).toEqual([
+      { params: { a: 1 }, method: "session/update" },
+      { params: { b: 2 }, method: "hydra-acp/prompt_queue/added" },
+      { params: { c: 3 }, method: "some/unknown/method" },
+    ]);
+  });
+
+  it("onAnyNotification runs alongside a per-method handler, not instead of it", () => {
+    const stream = makeControlledStream();
+    const conn = new JsonRpcConnection(stream);
+    const anyHandler = vi.fn();
+    const specificHandler = vi.fn();
+    conn.onAnyNotification(anyHandler);
+    conn.onNotification("update", specificHandler);
+
+    stream.emitMessage({ jsonrpc: "2.0", method: "update", params: { foo: 1 } });
+
+    expect(anyHandler).toHaveBeenCalledWith({ foo: 1 }, "update");
+    expect(specificHandler).toHaveBeenCalledWith({ foo: 1 }, "update");
+  });
+
   it("falls through to setDefaultHandler when no specific method is registered", async () => {
     const stream = makeControlledStream();
     const conn = new JsonRpcConnection(stream);

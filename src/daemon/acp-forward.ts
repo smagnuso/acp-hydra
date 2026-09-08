@@ -314,6 +314,26 @@ export class ForeignSessionRegistry {
             )
           : undefined;
       }
+      const attachment: Attachment = {
+        peerConnection,
+        localId: foreign.localId,
+        target,
+      };
+      // Wire the relay BEFORE sending session/attach, not after it
+      // resolves. The peer can (and for a readonly/cold attach, does)
+      // push history-replay notifications on this connection while the
+      // attach request is still in flight, before its response comes
+      // back. Wiring late would still catch them, since
+      // JsonRpcConnection buffers a notification with no per-method
+      // handler registered yet, but onAnyNotification is a live-only
+      // catch-all with nothing to drain from that buffer, so replay
+      // notifications sent during this exact window would otherwise be
+      // silently lost, the transcript arrives empty even though the
+      // peer sent everything correctly. No downside to wiring early:
+      // relaying is validated per-message by matching sessionId, not by
+      // whether this.attachments has the entry yet, and forget() is a
+      // safe no-op if attach ends up failing below.
+      this.wireAttachment(foreign.name, attachment);
       let result: Record<string, unknown>;
       try {
         result = await peerConnection.request<Record<string, unknown>>(
@@ -324,12 +344,6 @@ export class ForeignSessionRegistry {
         void peerConnection.close().catch(() => undefined);
         return isRequest ? errorFromCatch(id!, err) : undefined;
       }
-      const attachment: Attachment = {
-        peerConnection,
-        localId: foreign.localId,
-        target,
-      };
-      this.wireAttachment(foreign.name, attachment);
       this.attachments.set(key, attachment);
       const rewrapped =
         result && typeof result.sessionId === "string"
@@ -405,23 +419,29 @@ export class ForeignSessionRegistry {
     const forget = (): void => {
       this.attachments.delete(attachKey(target.clientId, foreignId));
     };
-    peerConnection.onNotification("session/update", (params) => {
+    // Every session-scoped notification a peer's Session might broadcast
+    // carries `sessionId` at the top level: session/update, and the whole
+    // hydra-acp/prompt_queue/{added,updated,removed,held,released} and
+    // hydra-acp/{cancel_failed,session/armed_tasks_updated} family. A
+    // hardcoded per-method list here previously only relayed
+    // session/update and hydra-acp/session/closed, silently dropping
+    // everything else (buffered on the peer connection with no handler
+    // ever registered to drain it), including the prompt_queue_added/
+    // removed pair the TUI's own-prompt echo waits on, which is why a
+    // federated session's own submitted prompts never rendered and
+    // consecutive turns visually ran together. Relay generically instead
+    // so nothing new added to Session's broadcast surface needs a
+    // matching update here.
+    peerConnection.onAnyNotification((params, method) => {
       const p = params as { sessionId?: string } | null;
       if (!p || p.sessionId !== localId) {
         return;
       }
-      void target.connection
-        .notify("session/update", { ...p, sessionId: foreignId })
-        .catch(() => undefined);
-    });
-    peerConnection.onNotification("hydra-acp/session/closed", (params) => {
-      const p = params as { sessionId?: string } | null;
-      if (!p || p.sessionId !== localId) {
-        return;
+      if (method === "hydra-acp/session/closed") {
+        forget();
       }
-      forget();
       void target.connection
-        .notify("hydra-acp/session/closed", { sessionId: foreignId })
+        .notify(method, { ...p, sessionId: foreignId })
         .catch(() => undefined);
     });
     peerConnection.onRequest("hydra-acp/session/request_permission", async (params) => {

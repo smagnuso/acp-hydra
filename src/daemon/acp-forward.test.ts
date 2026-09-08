@@ -521,6 +521,37 @@ describe("ForeignSessionRegistry", () => {
     expect(reattach).toMatchObject({ jsonrpc: "2.0", id: 3, result: { sessionId: "peerb:abc" } });
   });
 
+  it("relays a history-replay notification the peer sends while session/attach is still in flight (regression: wireAttachment used to run after the attach response resolved, losing anything pushed during that window)", async () => {
+    const peer = buildFakePeer();
+    peer.onEachServer((server) => {
+      server.onRequest("session/attach", async (raw) => {
+        const sessionId = (raw as { sessionId: string }).sessionId;
+        // Simulate the peer replaying history before it answers attach,
+        // exactly like the readonly-viewer attach path does on a real
+        // daemon (see acp-ws.ts's session/attach handler).
+        await server.notify("session/update", {
+          sessionId,
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "replayed" } },
+        });
+        return { sessionId };
+      });
+    });
+    const registry = new ForeignSessionRegistry(store, peer.dial);
+    const { target, stream } = localTarget("local_1");
+    await registry.handleLocalMessage(
+      { jsonrpc: "2.0", id: 1, method: "session/attach", params: { sessionId: "peerb:abc" } },
+      "peerb:abc",
+      target,
+    );
+    const relayed = stream.sent.find(
+      (m) => "method" in m && m.method === "session/update",
+    );
+    expect(relayed).toMatchObject({
+      method: "session/update",
+      params: { sessionId: "peerb:abc", update: { content: { text: "replayed" } } },
+    });
+  });
+
   it("relays session/update pushes from the peer with the id rewrapped", async () => {
     const peer = buildFakePeer();
     withEchoAttach(peer);
@@ -542,6 +573,57 @@ describe("ForeignSessionRegistry", () => {
       method: "session/update",
       params: { sessionId: "peerb:abc" },
     });
+  });
+
+  it("relays hydra-acp/prompt_queue/added and /removed (regression: only session/update and hydra-acp/session/closed used to be relayed, silently dropping everything else)", async () => {
+    const peer = buildFakePeer();
+    withEchoAttach(peer);
+    const registry = new ForeignSessionRegistry(store, peer.dial);
+    const { target, stream } = localTarget("local_1");
+    await registry.handleLocalMessage(
+      { jsonrpc: "2.0", id: 1, method: "session/attach", params: { sessionId: "peerb:abc" } },
+      "peerb:abc",
+      target,
+    );
+    await peer.servers[0]!.notify("hydra-acp/prompt_queue/added", {
+      sessionId: "abc",
+      messageId: "m1",
+      position: 0,
+    });
+    await peer.servers[0]!.notify("hydra-acp/prompt_queue/removed", {
+      sessionId: "abc",
+      messageId: "m1",
+      reason: "started",
+    });
+    const added = stream.sent.find(
+      (m) => "method" in m && m.method === "hydra-acp/prompt_queue/added",
+    );
+    const removed = stream.sent.find(
+      (m) => "method" in m && m.method === "hydra-acp/prompt_queue/removed",
+    );
+    expect(added).toMatchObject({ params: { sessionId: "peerb:abc", messageId: "m1" } });
+    expect(removed).toMatchObject({
+      params: { sessionId: "peerb:abc", messageId: "m1", reason: "started" },
+    });
+  });
+
+  it("ignores a notification for a different sessionId on the same dedicated connection", async () => {
+    const peer = buildFakePeer();
+    withEchoAttach(peer);
+    const registry = new ForeignSessionRegistry(store, peer.dial);
+    const { target, stream } = localTarget("local_1");
+    await registry.handleLocalMessage(
+      { jsonrpc: "2.0", id: 1, method: "session/attach", params: { sessionId: "peerb:abc" } },
+      "peerb:abc",
+      target,
+    );
+    await peer.servers[0]!.notify("hydra-acp/prompt_queue/added", {
+      sessionId: "some-other-session",
+      messageId: "m1",
+    });
+    expect(
+      stream.sent.some((m) => "method" in m && m.method === "hydra-acp/prompt_queue/added"),
+    ).toBe(false);
   });
 
   it("relays hydra-acp/session/closed from the peer and clears the registration", async () => {

@@ -33,6 +33,11 @@ export class JsonRpcConnection {
   private requestHandlers = new Map<string, RequestHandler>();
   private defaultRequestHandler: RequestHandler | undefined;
   private notificationHandlers = new Map<string, NotificationHandler>();
+  // Fires for every inbound notification, regardless of method name or
+  // whether a per-method handler is also registered. Doesn't interact
+  // with the per-method buffering below: a catch-all listener is always
+  // live from the moment it's added, so there's nothing to buffer for it.
+  private anyNotificationHandlers: NotificationHandler[] = [];
   // Notifications received before a handler was registered. Some agents
   // (e.g. claude-acp) advertise their command list in the same chunk as
   // the `session/new` response, which is processed before the consumer
@@ -106,6 +111,15 @@ export class JsonRpcConnection {
     const count = buf?.length ?? 0;
     this.bufferedNotifications.delete(method);
     return count;
+  }
+
+  // See notes on the field above: fires for every notification, in
+  // addition to whatever per-method handler(s) also run. Used by
+  // acp-forward.ts to relay a federated peer's traffic verbatim without
+  // maintaining a hardcoded list of every notification method a Session
+  // might ever broadcast.
+  onAnyNotification(handler: NotificationHandler): void {
+    this.anyNotificationHandlers.push(handler);
   }
 
   onClose(handler: (err?: Error) => void): void {
@@ -226,6 +240,13 @@ export class JsonRpcConnection {
   }
 
   private handleNotification(note: JsonRpcNotification): void {
+    for (const anyHandler of this.anyNotificationHandlers) {
+      try {
+        anyHandler(note.params, note.method);
+      } catch {
+        void 0;
+      }
+    }
     const handler = this.notificationHandlers.get(note.method);
     if (handler) {
       handler(note.params, note.method);
