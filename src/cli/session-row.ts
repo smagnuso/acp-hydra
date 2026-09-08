@@ -39,6 +39,10 @@ export interface SessionSummary {
   // yet (typical for imported-not-yet-attached rows), so imported rows
   // visibly carry their provenance instead of rendering as "-".
   importedFromMachine?: string;
+  // Set on a session federated in from a live `hydra remote` (session
+  // still lives on that peer; distinct from importedFromMachine, which
+  // marks a cold bundle-imported mirror). Takes precedence for display.
+  remote?: string;
   attachedClients: number;
   updatedAt: string;
   status?: "warm" | "cold";
@@ -225,8 +229,8 @@ export function formatCwdCell(s: SessionSummary): string {
 export function toRow(s: SessionSummary, now: number = Date.now()): Row {
   return {
     session: stripHydraSessionPrefix(s.sessionId),
-    upstream: formatUpstreamCell(s.upstreamSessionId, s.importedFromMachine),
-    host: s.importedFromMachine ?? "-",
+    upstream: formatUpstreamCell(s.upstreamSessionId, s.remote ?? s.importedFromMachine),
+    host: s.remote ?? s.importedFromMachine ?? "-",
     state: formatState(
       s.status,
       s.busy,

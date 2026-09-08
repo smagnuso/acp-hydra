@@ -26,6 +26,7 @@ import * as path from "node:path";
 import { expandHome, loadConfig } from "../../core/config.js";
 import { shortenHomePath } from "../../core/paths.js";
 import { daemonFetch } from "./_shared.js";
+import { matchesHostFilter } from "../session-host-filter.js";
 import {
   HEADER,
   DEFAULT_COLUMNS,
@@ -122,7 +123,7 @@ export async function runSessionsChanges(
     "/v1/sessions?includeNonInteractive=true",
     { expectStatus: 200 },
   );
-  const summaries = new Map<string, SessionSummary & { importedFromMachine?: string; upstreamSessionId?: string }>();
+  const summaries = new Map<string, SessionSummary & { importedFromMachine?: string; upstreamSessionId?: string; remote?: string }>();
   for (const s of (listRes.body as { sessions: SessionSummary[] }).sessions) {
     summaries.set(s.sessionId, s);
   }
@@ -139,13 +140,9 @@ export async function runSessionsChanges(
 
   let hits = body.results;
   if (opts.host !== undefined && opts.host !== "all") {
-    hits = hits.filter((h) => {
-      const s = summaries.get(h.sessionId);
-      if (opts.host === "local") {
-        return !s?.importedFromMachine || !!s?.upstreamSessionId;
-      }
-      return s?.importedFromMachine === opts.host && !s?.upstreamSessionId;
-    });
+    hits = hits.filter((h) =>
+      matchesHostFilter(summaries.get(h.sessionId) ?? {}, opts.host as string),
+    );
   }
 
   // A daemon that predates the `edit:` scope parses the prefix (the

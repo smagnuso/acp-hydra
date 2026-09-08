@@ -28,6 +28,7 @@ import {
   type SessionSummary,
 } from "../session-row.js";
 import { sessionMatchesDir } from "../session-dir-filter.js";
+import { matchesHostFilter } from "../session-host-filter.js";
 
 export async function runSessionsList(
   opts: {
@@ -75,6 +76,11 @@ export async function runSessionsList(
       updatedAt: string;
       status?: "warm" | "cold";
       importedFromMachine?: string;
+      // Set on entries merged in from a live `hydra remote` (see
+      // ForeignSessionCache in daemon/routes/session-forward.ts).
+      // Distinct from importedFromMachine, which marks a cold
+      // bundle-imported mirror instead.
+      remote?: string;
       originatingClient?: { name: string; version?: string };
       compactionState?: unknown;
     }>;
@@ -87,24 +93,21 @@ export async function runSessionsList(
   // Host filter:
   //   "local" — sessions created here OR imported and bound to a local
   //             agent (upstreamSessionId set). The "I'm working on this
-  //             here" bucket.
+  //             here" bucket. Federated (remote-set) sessions never land
+  //             here.
   //   "all"   — every session, no filter.
-  //   <host>  — passive mirrors imported from <host> that haven't been
-  //             attached locally yet. Once you attach, the session
-  //             graduates to "local" and stops appearing here.
+  //   <host>  — sessions live on the `hydra remote` registered under
+  //             <host>, OR passive mirrors imported from a machine named
+  //             <host> that haven't been attached locally yet. Once you
+  //             attach an import, it graduates to "local" and stops
+  //             appearing here; a federated session never graduates out
+  //             (there's no local copy to bind).
   // Default is "local". Applied before --json so scripts see the same
-  // view as humans.
+  // view as humans. See session-host-filter.ts for the exact rules.
   const host = opts.host ?? "local";
-  const hostFiltered = host === "all"
-    ? sessionsAfterInteractiveFilter
-    : host === "local"
-      ? sessionsAfterInteractiveFilter.filter(
-          (s) => !s.importedFromMachine || !!s.upstreamSessionId,
-        )
-      : sessionsAfterInteractiveFilter.filter(
-          (s) =>
-            s.importedFromMachine === host && !s.upstreamSessionId,
-        );
+  const hostFiltered = sessionsAfterInteractiveFilter.filter((s) =>
+    matchesHostFilter(s, host),
+  );
   // Directory scope, applied after the host filter and before --json so
   // scripts and the table agree. Subtree match on either recorded path.
   const dirFiltered = opts.dir === undefined
