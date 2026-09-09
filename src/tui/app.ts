@@ -299,7 +299,7 @@ import {
   collapseEditedFiles,
   editedFileFromTool,
 } from "./sidebar/edited-files.js";
-import { runningTools } from "./sidebar/running-tools.js";
+import { isRunningStatus, runningTools } from "./sidebar/running-tools.js";
 import { parseTodoWrite } from "./sidebar/todos.js";
 import {
   sampleTrees,
@@ -2127,6 +2127,10 @@ async function runSession(
   // the daemon. The 1Hz timer reads this to detect a stalled upstream
   // (silence past STALL_THRESHOLD_MS while busy) and flip the banner red.
   let lastUpdateAt: number | null = null;
+  // One stall notice per stall episode. Cleared as soon as output resumes, so
+  // a turn that stalls twice says so twice, while the threshold itself caps
+  // the rate at one notice per STALL_THRESHOLD_MS.
+  let stallNoticeShown = false;
   // Single 1Hz tick used by the busy banner: emits elapsedMs and a
   // stalled flag derived from the gap since the last session/update.
   // Used from the pendingTurns 0 → >0 transition and from the two
@@ -2150,10 +2154,39 @@ async function runSession(
       }
       const idleMs =
         lastUpdateAt === null ? 0 : Date.now() - lastUpdateAt;
+      if (idleMs < STALL_THRESHOLD_MS) {
+        stallNoticeShown = false;
+      }
+      // "Stalled" means nothing is running, not merely that nothing has been
+      // said. A long build and an armed background task are both silent by
+      // nature: across recent sessions, 43 of the 51 multi-minute mid-turn
+      // silences had a tool still open and every one of them resumed and
+      // finished. Painting those red trains the word to be ignored. With both
+      // excluded it matches the shape that actually wedges, where the agent
+      // has finished, nothing is live, and the turn terminal never arrives.
+      const nothingRunning = armedSince === null && !anyToolRunning();
+      const stalled = nothingRunning && idleMs >= STALL_THRESHOLD_MS;
       screenRef.setBanner({
         elapsedMs: Date.now() - sessionBusySince,
-        stalled: idleMs >= STALL_THRESHOLD_MS,
+        stalled,
       });
+      // Say it once per turn, in the transcript rather than the bar: the bar
+      // is width-budgeted and a persistent hint is chrome. Deliberately no
+      // mention of the force-stop escalation, which announces itself if the
+      // cancel goes unacknowledged.
+      if (stalled && !stallNoticeShown) {
+        stallNoticeShown = true;
+        screenRef.appendLines([
+          {
+            prefix: "⚠ ",
+            prefixStyle: "tool-status-fail",
+            body:
+              `no output for ${Math.round(idleMs / 60_000)}m and nothing ` +
+              `running. ^C to cancel`,
+            bodyStyle: "tool-status-fail",
+          },
+        ]);
+      }
       renderToolsBlock();
     }, 1_000);
   };
@@ -2281,6 +2314,11 @@ async function runSession(
   // a mid-turn reattach leaves ^C falling through to the exit path.
   let screenRef: Screen | null = null;
   let dispatcherRef: InputDispatcher | null = null;
+  // Late-bound for the same reason: `toolStates` is built much further down,
+  // but the 1Hz stall check above needs to know whether a tool call is still
+  // open. Returns false until then, which is the safe direction (a stall is
+  // only ever reported when we positively know nothing is running).
+  let anyToolRunning: () => boolean = () => false;
   // Last messageId we observed from a recordable session/update. Drives
   // onReconnect's `historyPolicy: "after_message"` request so the daemon
   // replays only the delta we missed. State-kind updates (model/mode/usage
@@ -7827,6 +7865,14 @@ async function runSession(
   // turn's tools block. Cleared at turn boundaries (the block gets
   // frozen into scrollback first) so each turn starts fresh.
   const toolStates = new Map<string, ToolLineState>();
+  anyToolRunning = () => {
+    for (const state of toolStates.values()) {
+      if (isRunningStatus(state.status)) {
+        return true;
+      }
+    }
+    return false;
+  };
   // toolCallId → the edit diff that was rendered into scrollback for it,
   // in render order. Unlike toolStates this survives turn boundaries (the
   // editdiff: scrollback blocks do too), so the ^O "File updates" toggle
