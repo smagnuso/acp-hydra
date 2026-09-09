@@ -7,7 +7,7 @@
 // to this table has found a hole in the contract, and the fix belongs in
 // the contract rather than in an exception here.
 
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -24,14 +24,29 @@ import {
 
 const exec = promisify(execFile);
 
+// The same per-file bump git-nested and the workspace-isolation suites
+// carry, for the same reason: every case here drives real git through a
+// provider, and process creation on Windows costs several times what it
+// does on POSIX. This was the last git-heavy file still on the config-wide
+// 10s, and it started timing out.
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
+
 const tempRoots: string[] = [];
 
 afterEach(async () => {
   // HYDRA_ACP_HOME (and therefore every workspace) is cleaned by
   // vitest.setup.ts, but source trees live in the OS tmpdir and would
   // otherwise accumulate across runs.
+  //
+  // Retries: a git subprocess may not have released the tree yet, and
+  // Windows refuses to remove a directory anything still holds open. On
+  // POSIX the first attempt always wins.
   await Promise.all(
-    tempRoots.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    tempRoots
+      .splice(0)
+      .map((dir) =>
+        fs.rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }),
+      ),
   );
 });
 
@@ -397,7 +412,10 @@ describe("git provider specifics", () => {
       return;
     }
     await provider.removeWorkspace(res.workspace, { force: true });
-    await fs.rm(source, { recursive: true, force: true });
+    // Deleting the source is the point of the test, not cleanup, so an
+    // EBUSY from a git subprocess that has not let go yet would fail this
+    // for the wrong reason.
+    await fs.rm(source, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 
     const restored = await provider.rematerialize(res.workspace);
     expect(restored.ok).toBe(false);
