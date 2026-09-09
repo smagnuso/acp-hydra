@@ -2460,7 +2460,7 @@ async function runSession(
   // Ack deadline for a cancel sent against a turn this TUI did not start
   // (armed in cancelRemoteTurn). The own-turn path has its own timer in
   // runPrompt; this one covers peer / reattached / agent-initiated turns,
-  // where turnInFlight is null and nothing else would ever escalate.
+  // where turnsInFlight is empty and nothing else would ever escalate.
   let remoteCancelAckTimer: NodeJS.Timeout | null = null;
 
   conn.onNotification("hydra-acp/prompt_queue/added", (params) => {
@@ -3642,11 +3642,19 @@ async function runSession(
     dispatcher.setTurnRunning(true);
   }
 
-  let turnInFlight: {
+  // Own prompts still awaiting their session/prompt response, oldest first.
+  // A list rather than a single slot: queueing a prompt behind a turn that is
+  // still running must not displace the running turn's cancel closure. When it
+  // did, ^C landed on the queued entry (starting its ladder over from soft
+  // cancel) and the running turn became unreachable from the keyboard for the
+  // rest of its life, which is exactly the state a wedged turn puts the user
+  // in. head = the turn the daemon is actually executing, so that is the one
+  // every cancel path drives.
+  const turnsInFlight: {
     text: string;
     attachments: Attachment[];
     cancel: () => void;
-  } | null = null;
+  }[] = [];
   // Text + chips staged by an Escape cancel: applied to the prompt
   // buffer when the worker drains, but only if the buffer is still
   // empty (so we never clobber something the user typed in the
@@ -4570,8 +4578,8 @@ async function runSession(
     finishSession = resolve;
   });
   // Send session/cancel to the daemon when the turn isn't ours to settle
-  // locally. `turnInFlight` is only set for turns this TUI initiated; on
-  // reattach mid-turn, or for a peer-initiated turn, it stays null while
+  // locally. `turnsInFlight` only holds turns this TUI initiated; on
+  // reattach mid-turn, or for a peer-initiated turn, it stays empty while
   // pendingTurns > 0. Sending cancel directly still works — the daemon
   // forwards it to the agent regardless of which client started the turn.
   const cancelRemoteTurn = (): void => {
@@ -4654,8 +4662,9 @@ async function runSession(
     });
   };
   const sigintHandler = (): void => {
-    if (turnInFlight) {
-      turnInFlight.cancel();
+    const running = turnsInFlight[0];
+    if (running) {
+      running.cancel();
       markCancelling();
       return;
     }
@@ -6530,20 +6539,21 @@ async function runSession(
         // the buffer so the user can edit and resubmit — but only when
         // nothing else is queued behind it and the buffer is empty (we
         // never overwrite text the user has typed). Plain ^C skips this.
-        if (effect.prefill && turnInFlight) {
+        const runningTurn = turnsInFlight[0];
+        if (effect.prefill && runningTurn) {
           const waitingEmpty = queueCache.size === 0;
           const bufferEmpty = dispatcher
             .state()
             .buffer.every((line) => line === "");
           if (waitingEmpty && bufferEmpty) {
             pendingPrefill = {
-              text: turnInFlight.text,
-              attachments: turnInFlight.attachments,
+              text: runningTurn.text,
+              attachments: runningTurn.attachments,
             };
           }
         }
-        if (turnInFlight) {
-          turnInFlight.cancel();
+        if (runningTurn) {
+          runningTurn.cancel();
         } else if (pendingTurns > 0) {
           cancelRemoteTurn();
         }
@@ -7631,8 +7641,23 @@ async function runSession(
 
     // Each new turn starts un-escalated: the first cancel is always a soft
     // session/cancel; only a failed/ignored one arms the force-stop.
-    forceStopArmed = false;
+    //
+    // Only when this prompt is the sole outstanding turn. forceStopArmed is
+    // one flag shared by every cancel path, so resetting it unconditionally
+    // let a prompt queued BEHIND a running turn silently revoke an escalation
+    // already offered for that turn. That is the common shape, not a corner:
+    // a wedged turn is exactly when the user types the next message while
+    // waiting, and doing so put force-stop permanently out of reach, leaving
+    // ^C to soft-cancel the queued entry forever. Measured on a turn that sat
+    // 1081s past its last output: cancel at T+0, escalation armed at T+4,
+    // prompt queued at T+7 disarmed it, and the turn only died when the
+    // agent's own 30s backstop fired. The all-settled branch in
+    // adjustPendingTurns is what legitimately disarms this.
+    if (pendingTurns === 1) {
+      forceStopArmed = false;
+    }
     let softCancelSent = false;
+    let settled = false;
     let cancelAckTimer: NodeJS.Timeout | null = null;
     const warnLine = (body: string): void => {
       const screenReady =
@@ -7643,7 +7668,7 @@ async function runSession(
       ]);
     };
     let forceStopRequested = false;
-    turnInFlight = {
+    const entry = {
       text,
       attachments,
       cancel: () => {
@@ -7675,7 +7700,7 @@ async function runSession(
         // ignored the cancel. Warn + arm the force-stop escalation.
         const cancelSentAt = Date.now();
         cancelAckTimer = setTimeout(() => {
-          if (turnInFlight === null) return;
+          if (settled) return;
           if (lastCancelFailedAt >= cancelSentAt) return;
           forceStopArmed = true;
           warnLine(
@@ -7684,6 +7709,7 @@ async function runSession(
         }, CANCEL_ACK_TIMEOUT_MS);
       },
     };
+    turnsInFlight.push(entry);
     let stopReason: string | undefined;
     try {
       const response = (await conn.request("session/prompt", {
@@ -7727,7 +7753,22 @@ async function runSession(
         ]);
       }
     } finally {
-      turnInFlight = null;
+      // Drop this turn only. Nulling a shared slot here also erased the entry
+      // of any prompt queued behind it, which then ran with no cancel closure
+      // at all.
+      settled = true;
+      const at = turnsInFlight.indexOf(entry);
+      if (at >= 0) {
+        turnsInFlight.splice(at, 1);
+      }
+      // Every cancel path drives the head. Where this turn WAS the head and
+      // another own turn inherits it, the successor has not ignored a cancel
+      // yet, so it starts un-escalated: otherwise its first ^C would skip the
+      // soft cancel and restart the agent outright. The all-settled branch in
+      // adjustPendingTurns covers the case where nothing inherits.
+      if (at === 0 && turnsInFlight.length > 0) {
+        forceStopArmed = false;
+      }
       if (cancelAckTimer !== null) {
         clearTimeout(cancelAckTimer);
         cancelAckTimer = null;
@@ -9861,7 +9902,7 @@ async function runSession(
       upstreamInterruptedSeen = false;
       screen.ensureSeparator();
       // Drift reconcile. At a real turn boundary with no queued prompt,
-      // no own prompt awaiting (turnInFlight), and no in-flight head id,
+      // no own prompt awaiting (turnsInFlight), and no in-flight head id,
       // pendingTurns MUST be 0. Anything higher is accumulated desync —
       // typically a turn_complete that never reached us (e.g. lost during
       // a daemon restart while a turn was in flight; markClosed's
@@ -9871,7 +9912,7 @@ async function runSession(
         shouldDriftSnap({
           pendingTurns,
           queueSize: queueCache.size,
-          ownTurnInFlight: turnInFlight !== null,
+          ownTurnInFlight: turnsInFlight.length > 0,
           hasInFlightHead: currentHeadMessageId !== undefined,
           replayDraining,
           amended: event.amended === true,
