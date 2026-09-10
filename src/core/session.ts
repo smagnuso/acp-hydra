@@ -907,6 +907,14 @@ export class Session {
   // agent restarted by itself reads BUSY rather than idle.
   // Drives the mid-turn elapsed counter delivered to fresh attachers.
   private promptStartedAt: number | undefined;
+  // Whether the in-flight turn has recorded a tool call, i.e. whether it
+  // may have caused a side effect. Gates the transient-auth retry in
+  // dispatchPrompt: re-sending a prompt that already ran a tool could
+  // repeat that tool. Deliberately keyed on tool calls rather than on any
+  // output, because the agent reports an auth failure by STREAMING the
+  // error text, so an "emitted anything at all" test would see that
+  // message and never retry.
+  private turnRanTool = false;
   // Set while the agent is taking a turn nobody asked for. See
   // noteAgentActivity. `cause` is the background task we believe woke it,
   // for client labelling. There is no timer: the turn ends when the agent
@@ -3607,6 +3615,7 @@ export class Session {
       sentBy.depth = entry.originator.depth;
     }
     this.promptStartedAt = Date.now();
+    this.turnRanTool = false;
     this.recordAndBroadcast(
       "session/update",
       {
@@ -9366,6 +9375,7 @@ export class Session {
       return;
     }
     if (update.sessionUpdate === "tool_call") {
+      this.turnRanTool = true;
       this.openToolCalls.add(id);
       return;
     }
@@ -10282,13 +10292,28 @@ export class Session {
     try {
       return await send();
     } catch (err) {
-      if (!this.loadExistingAgentSession || !isUpstreamSessionLost(err)) {
+      if (this.loadExistingAgentSession && isUpstreamSessionLost(err)) {
+        this.logger?.warn(
+          `agent ${this.agentId} no longer knows upstream session ${this.upstreamSessionId} for ${this.sessionId}; reloading it onto a fresh process and retrying the prompt once`,
+        );
+        await this.reloadUpstreamAfterAgentLoss();
+        return await send();
+      }
+      // A turn that already ran a tool may have caused a side effect, so
+      // it is never safe to re-send however transient the failure looks.
+      if (!isTransientAuthFailure(err) || this.turnRanTool) {
         throw err;
       }
       this.logger?.warn(
-        `agent ${this.agentId} no longer knows upstream session ${this.upstreamSessionId} for ${this.sessionId}; reloading it onto a fresh process and retrying the prompt once`,
+        `agent ${this.agentId} hit a transient auth failure for ${this.sessionId}; retrying the prompt once in ${TRANSIENT_AUTH_RETRY_MS}ms`,
       );
-      await this.reloadUpstreamAfterAgentLoss();
+      await new Promise((resolve) => setTimeout(resolve, TRANSIENT_AUTH_RETRY_MS));
+      // Cancelled while we sat out the refresh window: the user is no
+      // longer waiting on this turn, so surface the original failure
+      // rather than starting work they gave up on.
+      if (entry.cancelled) {
+        throw err;
+      }
       return await send();
     }
   }
@@ -10323,19 +10348,63 @@ const UPSTREAM_SESSION_LOST_PATTERNS = [
   "the claude agent session has ended",
 ];
 
-export function isUpstreamSessionLost(err: unknown): boolean {
+// Searchable text of an agent-side InternalError, or undefined when the
+// error isn't one. Both shapes matter: an unexpected throw reaches us as
+// InternalError with the text in `data.details`, a RequestError.internalError
+// carries it appended to `message`.
+//
+// Gating on InternalError here is what stops Hydra's own -32001
+// SessionNotFound (a different condition, raised before the agent is ever
+// consulted) from being mistaken for an agent-side failure.
+function agentErrorHaystack(err: unknown): string | undefined {
   const e = err as { code?: unknown; message?: unknown; data?: unknown };
-  // Gate on InternalError so Hydra's own -32001 SessionNotFound (a
-  // different condition, raised before the agent is ever consulted) can
-  // never be mistaken for the agent having lost the session.
   if (e?.code !== JsonRpcErrorCodes.InternalError) {
-    return false;
+    return undefined;
   }
   const details = (e.data as { details?: unknown } | undefined)?.details;
-  const haystack = `${typeof e.message === "string" ? e.message : ""} ${
+  return `${typeof e.message === "string" ? e.message : ""} ${
     typeof details === "string" ? details : ""
   }`.toLowerCase();
-  return UPSTREAM_SESSION_LOST_PATTERNS.some((p) => haystack.includes(p));
+}
+
+export function isUpstreamSessionLost(err: unknown): boolean {
+  const haystack = agentErrorHaystack(err);
+  return (
+    haystack !== undefined &&
+    UPSTREAM_SESSION_LOST_PATTERNS.some((p) => haystack.includes(p))
+  );
+}
+
+// Agent-side auth failures that clear on their own. Claude Code guards its
+// OAuth refresh with a lock; when several agent processes share one
+// credential file and the access token expires, the losers fail the whole
+// turn with this rather than waiting for the winner to finish refreshing.
+//
+// Unlike UPSTREAM_SESSION_LOST_PATTERNS these carry NO structural guarantee
+// about when they fire. Those two are safe because the agent throws them
+// from the top of its prompt handler, before anything can run; a token can
+// instead expire mid-turn, after tools have run. So matching the text is
+// necessary but not sufficient: dispatchPrompt additionally requires that
+// the turn recorded no tool call.
+//
+// Kept deliberately narrow. Matching a wider family of auth errors would
+// start silently re-sending prompts against credentials that are genuinely
+// bad and will never self-heal.
+const TRANSIENT_AUTH_PATTERNS = ["failed to refresh oauth token"];
+
+// How long to wait before the single transient-auth retry. The failure
+// means another process holds the refresh lock, so the useful wait is
+// however long that process needs; an immediate resend just burns the one
+// retry. Measured at 78s from first failure to the refreshed token landing,
+// with three attempts spread over the first 48s all failing.
+export const TRANSIENT_AUTH_RETRY_MS = 60_000;
+
+export function isTransientAuthFailure(err: unknown): boolean {
+  const haystack = agentErrorHaystack(err);
+  return (
+    haystack !== undefined &&
+    TRANSIENT_AUTH_PATTERNS.some((p) => haystack.includes(p))
+  );
 }
 
 function withCode(err: Error, code: number): Error & { code: number } {
